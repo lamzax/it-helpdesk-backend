@@ -1,0 +1,54 @@
+:root {
+  --blue: #0f6cbd; --green: #2e9e4c; --red: #c0392b; --gray: #666;
+  --bg: #f5f6f8; --border: #e2e4e8;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif; background: var(--bg); color: #222; }
+#loginScreen { max-width: 380px; margin: 80px auto; background: #fff; padding: 32px; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+#loginScreen h1 { text-align: center; font-size: 22px; margin-bottom: 4px; }
+#loginScreen p { text-align: center; color: var(--gray); font-size: 13px; margin-top: 0; }
+#loginScreen input, #loginScreen select { width: 100%; padding: 10px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }
+.btn { display: inline-block; padding: 9px 16px; border-radius: 8px; border: none; font-size: 14px; cursor: pointer; font-weight: 600; }
+.btn-primary { background: var(--blue); color: #fff; width: 100%; }
+.btn-green { background: var(--green); color: #fff; }
+.btn-red { background: var(--red); color: #fff; }
+.btn-outline { background: #fff; border: 1px solid var(--blue); color: var(--blue); }
+.btn-sm { padding: 5px 10px; font-size: 12px; }
+#app { display: none; }
+header { background: #fff; border-bottom: 1px solid var(--border); padding: 0 24px; display: flex; align-items: center; justify-content: space-between; height: 56px; }
+header h1 { font-size: 18px; margin: 0; }
+header .who { font-size: 13px; color: var(--gray); }
+nav { display: flex; gap: 4px; padding: 12px 24px 0; background: #fff; border-bottom: 1px solid var(--border); }
+nav button { background: none; border: none; padding: 10px 16px; cursor: pointer; font-size: 14px; border-radius: 8px 8px 0 0; color: var(--gray); }
+nav button.active { color: var(--blue); font-weight: 600; border-bottom: 2px solid var(--blue); }
+main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 8px; flex-wrap: wrap; }
+.toolbar input[type=text] { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; width: 240px; }
+table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.05); }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+th { background: #fafbfc; font-weight: 600; color: var(--gray); }
+tr:last-child td { border-bottom: none; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: #fafbfc; }
+.badge { padding: 3px 8px; border-radius: 10px; font-size: 11px; color: #fff; }
+.overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); align-items: flex-start; justify-content: center; padding: 40px 16px; overflow-y: auto; z-index: 50; }
+.overlay.open { display: flex; }
+.modal { background: #fff; border-radius: 12px; padding: 24px; width: 100%; max-width: 520px; }
+.modal h2 { margin-top: 0; font-size: 18px; }
+.modal label { display: block; font-size: 12px; font-weight: 600; color: var(--gray); margin: 10px 0 4px; }
+.modal input, .modal select, .modal textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.section-title { font-weight: 700; margin: 20px 0 8px; font-size: 14px; }
+.history-item { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.history-item:last-child { border-bottom: none; }
+.muted { color: var(--gray); font-size: 12px; }
+.import-preview { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; margin: 10px 0; }
+.import-preview table { box-shadow: none; }
+.map-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+.map-row label { width: 140px; margin: 0; flex-shrink: 0; }
+.map-row select { flex: 1; }
+.result-box { background: #fafbfc; border-radius: 8px; padding: 12px; font-size: 13px; margin-top: 12px; }
+.tabs-inline { display: flex; gap: 8px; margin-bottom: 14px; }
+.tabs-inline button { background: #eef1f4; border: none; padding: 6px 12px; border-radius: 16px; font-size: 12px; cursor: pointer; }
+.tabs-inline button.active { background: var(--blue); color: #fff; }
+.empty { text-align: center; color: var(--gray); padding: 40px 0; }

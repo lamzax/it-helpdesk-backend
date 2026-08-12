@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="lv">
+<head>
+<meta charset="UTF-8" />
+<title>IT Helpdesk — Admin panelis</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="style.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+</head>
+<body>
+
+<div id="loginScreen">
+  <h1>IT Helpdesk</h1>
+  <p>Admin panelis</p>
+  <input id="loginName" type="text" placeholder="Vārds Uzvārds" />
+  <input id="loginEmail" type="text" placeholder="E-pasts" />
+  <select id="loginProvider">
+    <option value="microsoft">Microsoft (MS365)</option>
+    <option value="google">Google</option>
+  </select>
+  <button class="btn btn-primary" onclick="doLogin()">Pieslēgties</button>
+  <p class="muted" id="loginError"></p>
+  <p class="muted">Piezīme: lai piekļūtu admin panelim, jūsu e-pastam jābūt norādītam backend <code>.env</code> failā mainīgajā <code>ADMIN_EMAILS</code>.</p>
+</div>
+
+<div id="app">
+  <header>
+    <h1>IT Helpdesk — Admin</h1>
+    <div class="who">
+      <span id="whoAmI"></span>
+      <button class="btn btn-outline btn-sm" onclick="logout()" style="margin-left:10px">Iziet</button>
+    </div>
+  </header>
+  <nav id="mainNav"></nav>
+  <main id="mainContent"></main>
+</div>
+
+<div class="overlay" id="overlay"><div class="modal" id="modalContent"></div></div>
+
+<script src="app.js"></script>
+</body>
+</html>
