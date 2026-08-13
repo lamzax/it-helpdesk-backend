@@ -275,6 +275,7 @@ CREATE TABLE tickets (
                         CHECK (priority IN ('low','medium','high','critical')),
     source          TEXT NOT NULL DEFAULT 'mobile'
                         CHECK (source IN ('mobile','web','qr')),
+    custom_fields   JSONB NOT NULL DEFAULT '{}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at     TIMESTAMPTZ,
@@ -332,6 +333,27 @@ CREATE TABLE push_tokens (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (token)
 );
+
+-- ============================================================
+-- 7.1 PIELĀGOTIE LAUKI (custom fields) -- admins var pats definēt papildu
+-- laukus iekārtām, ticketiem, aplikācijām un tālruņu numuriem, bez tabulas
+-- struktūras maiņas. Skatīt migrāciju 003 komentārus.
+-- ============================================================
+
+CREATE TABLE custom_field_definitions (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    table_name      TEXT NOT NULL CHECK (table_name IN ('assets','tickets','applications','phone_numbers')),
+    field_key       TEXT NOT NULL,
+    label           TEXT NOT NULL,
+    field_type      TEXT NOT NULL CHECK (field_type IN ('text','number','boolean','date','select')),
+    options         JSONB NOT NULL DEFAULT '[]',
+    is_required     BOOLEAN NOT NULL DEFAULT false,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    is_active       BOOLEAN NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (table_name, field_key)
+);
+CREATE INDEX idx_custom_field_defs_table ON custom_field_definitions (table_name, sort_order);
 
 -- ============================================================
 -- 8. AUTOMATISKIE TRIGERI
