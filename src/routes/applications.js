@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { sanitizeCustomFields } = require('../utils/customFields');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -46,24 +47,27 @@ router.get('/:id', async (req, res) => {
 
 // POST /api/applications -- add
 router.post('/', async (req, res) => {
-  const { name, vendor, category, description } = req.body;
+  const { name, vendor, category, description, customFields } = req.body;
   if (!name) return res.status(400).json({ error: 'name ir obligats' });
+  const sanitizedCustom = await sanitizeCustomFields('applications', customFields);
   const result = await pool.query(
-    'INSERT INTO applications (name, vendor, category, description) VALUES ($1,$2,$3,$4) RETURNING *',
-    [name, vendor || null, category || null, description || null]
+    'INSERT INTO applications (name, vendor, category, description, custom_fields) VALUES ($1,$2,$3,$4,$5) RETURNING *',
+    [name, vendor || null, category || null, description || null, JSON.stringify(sanitizedCustom)]
   );
   res.status(201).json({ application: result.rows[0] });
 });
 
 // PATCH /api/applications/:id -- edit
 router.patch('/:id', async (req, res) => {
-  const { name, vendor, category, description } = req.body;
+  const { name, vendor, category, description, customFields } = req.body;
+  const sanitizedCustom = customFields !== undefined ? await sanitizeCustomFields('applications', customFields) : null;
   const result = await pool.query(
     `UPDATE applications SET
        name = COALESCE($1, name), vendor = COALESCE($2, vendor),
-       category = COALESCE($3, category), description = COALESCE($4, description)
+       category = COALESCE($3, category), description = COALESCE($4, description),
+       custom_fields = CASE WHEN $6::jsonb IS NOT NULL THEN custom_fields || $6::jsonb ELSE custom_fields END
      WHERE id = $5 RETURNING *`,
-    [name, vendor, category, description, req.params.id]
+    [name, vendor, category, description, req.params.id, sanitizedCustom ? JSON.stringify(sanitizedCustom) : null]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'Aplikācija nav atrasta' });
   res.json({ application: result.rows[0] });

@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { sanitizeCustomFields } = require('../utils/customFields');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -36,24 +37,27 @@ router.get('/:id', async (req, res) => {
 
 // POST /api/phone-numbers -- add
 router.post('/', async (req, res) => {
-  const { number, carrier, simIccid, planName, monthlyCost } = req.body;
+  const { number, carrier, simIccid, planName, monthlyCost, customFields } = req.body;
   if (!number) return res.status(400).json({ error: 'number ir obligats' });
+  const sanitizedCustom = await sanitizeCustomFields('phone_numbers', customFields);
   const result = await pool.query(
-    `INSERT INTO phone_numbers (number, carrier, sim_iccid, plan_name, monthly_cost)
-     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-    [number, carrier || null, simIccid || null, planName || null, monthlyCost || null]
+    `INSERT INTO phone_numbers (number, carrier, sim_iccid, plan_name, monthly_cost, custom_fields)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [number, carrier || null, simIccid || null, planName || null, monthlyCost || null, JSON.stringify(sanitizedCustom)]
   );
   res.status(201).json({ phoneNumber: result.rows[0] });
 });
 
 // PATCH /api/phone-numbers/:id -- edit
 router.patch('/:id', async (req, res) => {
-  const { carrier, simIccid, planName, monthlyCost } = req.body;
+  const { carrier, simIccid, planName, monthlyCost, customFields } = req.body;
+  const sanitizedCustom = customFields !== undefined ? await sanitizeCustomFields('phone_numbers', customFields) : null;
   const result = await pool.query(
     `UPDATE phone_numbers SET carrier = COALESCE($1,carrier), sim_iccid = COALESCE($2,sim_iccid),
-       plan_name = COALESCE($3,plan_name), monthly_cost = COALESCE($4,monthly_cost)
+       plan_name = COALESCE($3,plan_name), monthly_cost = COALESCE($4,monthly_cost),
+       custom_fields = CASE WHEN $6::jsonb IS NOT NULL THEN custom_fields || $6::jsonb ELSE custom_fields END
      WHERE id = $5 RETURNING *`,
-    [carrier, simIccid, planName, monthlyCost, req.params.id]
+    [carrier, simIccid, planName, monthlyCost, req.params.id, sanitizedCustom ? JSON.stringify(sanitizedCustom) : null]
   );
   if (result.rows.length === 0) return res.status(404).json({ error: 'Numurs nav atrasts' });
   res.json({ phoneNumber: result.rows[0] });

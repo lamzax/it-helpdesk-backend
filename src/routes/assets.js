@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { sanitizeCustomFields } = require('../utils/customFields');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -105,7 +106,7 @@ router.post('/', requireRole('admin'), async (req, res) => {
   const {
     assetTag, categoryCode, name, manufacturer, model, serialNumber, location,
     ipAddress, macAddress, purchaseDate, purchasePrice, vendor, warrantyUntil,
-    attributes, notes, generateQr = true,
+    attributes, customFields, notes, generateQr = true,
   } = req.body;
   if (!assetTag || !categoryCode || !name) {
     return res.status(400).json({ error: 'assetTag, categoryCode un name ir obligati' });
@@ -116,6 +117,10 @@ router.post('/', requireRole('admin'), async (req, res) => {
     await client.query('BEGIN');
     const catRes = await client.query('SELECT id FROM asset_categories WHERE code = $1', [categoryCode]);
     if (catRes.rows.length === 0) throw new Error('Nezinama iekartas kategorija: ' + categoryCode);
+
+    // Pielāgotie lauki (admin panelī definēti) glabājas kopā ar "attributes" JSONB
+    const sanitizedCustom = await sanitizeCustomFields('assets', customFields);
+    const mergedAttributes = { ...(attributes || {}), ...sanitizedCustom };
 
     const qrCode = generateQr
       ? `AST-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`.toUpperCase()
@@ -128,7 +133,7 @@ router.post('/', requireRole('admin'), async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'in_stock') RETURNING *`,
       [assetTag, qrCode, catRes.rows[0].id, name, manufacturer || null, model || null, serialNumber || null,
        location || null, ipAddress || null, macAddress || null, purchaseDate || null, purchasePrice || null,
-       vendor || null, warrantyUntil || null, JSON.stringify(attributes || {}), notes || null]
+       vendor || null, warrantyUntil || null, JSON.stringify(mergedAttributes), notes || null]
     );
     const asset = assetRes.rows[0];
 
@@ -154,15 +159,22 @@ router.patch('/:id', requireRole('admin'), async (req, res) => {
     name: 'name', manufacturer: 'manufacturer', model: 'model', serialNumber: 'serial_number',
     location: 'location', ipAddress: 'ip_address', macAddress: 'mac_address',
     purchaseDate: 'purchase_date', purchasePrice: 'purchase_price', vendor: 'vendor',
-    warrantyUntil: 'warranty_until', notes: 'notes', status: 'status', attributes: 'attributes',
+    warrantyUntil: 'warranty_until', notes: 'notes', status: 'status',
   };
   const sets = [];
   const params = [];
   for (const [key, column] of Object.entries(allowedFields)) {
     if (req.body[key] !== undefined) {
-      params.push(key === 'attributes' ? JSON.stringify(req.body[key]) : req.body[key]);
+      params.push(req.body[key]);
       sets.push(`${column} = $${params.length}`);
     }
+  }
+  // Pielāgotie lauki tiek APVIENOTI ar esošo "attributes" JSONB (nevis
+  // pārrakstīti), lai rediģējot vienu lauku, pārējie netiktu pazaudēti.
+  if (req.body.customFields !== undefined) {
+    const sanitizedCustom = await sanitizeCustomFields('assets', req.body.customFields);
+    params.push(JSON.stringify(sanitizedCustom));
+    sets.push(`attributes = attributes || $${params.length}::jsonb`);
   }
   if (sets.length === 0) return res.status(400).json({ error: 'Nav ko atjaunot' });
 

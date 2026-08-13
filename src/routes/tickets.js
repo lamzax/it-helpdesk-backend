@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
+const { sanitizeCustomFields } = require('../utils/customFields');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -103,10 +104,11 @@ router.get('/:id', async (req, res) => {
 // POST /api/tickets -- jauna ticketa registresana no mobilas aplikacijas
 // body: { title, description, categoryCode, qrCode?, priority?, attachmentUrls?: [] }
 router.post('/', async (req, res) => {
-  const { title, description, categoryCode, qrCode, assetId: assetIdInput, priority, attachmentUrls = [] } = req.body;
+  const { title, description, categoryCode, qrCode, assetId: assetIdInput, priority, attachmentUrls = [], customFields } = req.body;
   if (!title || !categoryCode) {
     return res.status(400).json({ error: 'title un categoryCode ir obligati' });
   }
+  const sanitizedCustom = await sanitizeCustomFields('tickets', customFields);
 
   const client = await pool.connect();
   try {
@@ -133,10 +135,10 @@ router.post('/', async (req, res) => {
     const ticketNumber = await generateTicketNumber(client);
     const ticketRes = await client.query(
       `INSERT INTO tickets (ticket_number, title, description, category_id, asset_id,
-                             reporter_id, priority, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'mobile') RETURNING *`,
+                             reporter_id, priority, source, custom_fields)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'mobile',$8) RETURNING *`,
       [ticketNumber, title, description || null, category.id, assetId,
-       req.user.id, priority || category.default_priority]
+       req.user.id, priority || category.default_priority, JSON.stringify(sanitizedCustom)]
     );
     const ticket = ticketRes.rows[0];
 
