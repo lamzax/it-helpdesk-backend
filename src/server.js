@@ -48,3 +48,19 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`IT Helpdesk API klausas uz porta ${PORT}`));
+
+// ============================================================
+// DROŠĪBAS TĪKLS: ja kādā vietā koda pieprasījums pret datubāzi izmet
+// kļūdu, ko konkrētais maršruts (nepilnīgi) nenoķer ar try/catch, tas
+// NEDRĪKST avarēt VISU serveri (kas citādi nozīmētu 502 kļūdu VISIEM
+// lietotājiem, kamēr Render to automātiski restartē). Šie divi handleri
+// tikai pieraksta kļūdu žurnālā un ļauj serverim turpināt darboties.
+// Tas nav aizstājējs pareizai try/catch katrā maršrutā (skat. kā tas
+// izdarīts categories.js), bet ir papildu drošība pret nepamanītām vietām.
+// ============================================================
+process.on('unhandledRejection', (reason) => {
+  console.error('Neapstrādāts Promise noraidījums:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('Neapstrādāta izņēmumsituācija:', err);
+});
