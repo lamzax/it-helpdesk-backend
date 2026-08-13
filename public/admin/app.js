@@ -74,6 +74,7 @@ function renderNav() {
     ['tickets', 'Ticketi'],
     ['assets', 'Iekārtas'], ['applications', 'Aplikācijas'], ['phones', 'Tālruņu numuri'],
     ['access', 'Piekļuves tiesības'], ['employees', 'Darbinieki'], ['categories', 'Kategorijas'],
+    ['customFields', 'Pielāgotie lauki'],
   ];
   const nav = document.getElementById('mainNav');
   nav.innerHTML = tabs.map(([key, label]) =>
@@ -84,7 +85,7 @@ function renderNav() {
 function setTab(tab) { state.tab = tab; renderNav(); renderTab(); }
 
 function renderTab() {
-  const map = { tickets: renderTicketsTab, assets: renderAssetsTab, applications: renderApplicationsTab, phones: renderPhonesTab, access: renderAccessTab, employees: renderEmployeesTab, categories: renderCategoriesTab };
+  const map = { tickets: renderTicketsTab, assets: renderAssetsTab, applications: renderApplicationsTab, phones: renderPhonesTab, access: renderAccessTab, employees: renderEmployeesTab, categories: renderCategoriesTab, customFields: renderCustomFieldsTab };
   map[state.tab]();
 }
 
@@ -189,6 +190,181 @@ async function submitTicketComment(id) {
   if (!body) return;
   try { await api('/api/tickets/' + id + '/comments', { method: 'POST', body: { body, isInternal } }); openTicketDetail(id); }
   catch (e) { alert(e.message); }
+}
+
+// ============================================================
+// PIELĀGOTIE LAUKI (custom fields) -- kopīgas palīgfunkcijas
+// ============================================================
+let customFieldDefsCache = {};
+
+async function loadCustomFieldDefs(table) {
+  const { fields } = await api('/api/custom-fields?table=' + table);
+  customFieldDefsCache[table] = fields;
+  return fields;
+}
+
+function renderCustomFieldsHTML(table, existingValues = {}) {
+  const defs = customFieldDefsCache[table] || [];
+  if (defs.length === 0) return '';
+  return `
+    <div class="section-title">Pielāgotie lauki</div>
+    ${defs.map((f) => {
+      const val = existingValues[f.field_key];
+      const id = `cf_${table}_${f.field_key}`;
+      if (f.field_type === 'boolean') {
+        return `<label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:8px">
+          <input type="checkbox" id="${id}" style="width:auto" ${val ? 'checked' : ''} /> ${esc(f.label)}
+        </label>`;
+      }
+      if (f.field_type === 'select') {
+        return `<label>${esc(f.label)}${f.is_required ? ' *' : ''}</label>
+          <select id="${id}">
+            <option value="">— nav izvēlēts —</option>
+            ${(f.options || []).map((o) => `<option value="${esc(o)}" ${val === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+          </select>`;
+      }
+      const inputType = f.field_type === 'number' ? 'number' : f.field_type === 'date' ? 'date' : 'text';
+      return `<label>${esc(f.label)}${f.is_required ? ' *' : ''}</label>
+        <input type="${inputType}" id="${id}" value="${val !== undefined && val !== null ? esc(val) : ''}" />`;
+    }).join('')}`;
+}
+
+function collectCustomFieldValues(table) {
+  const defs = customFieldDefsCache[table] || [];
+  const values = {};
+  for (const f of defs) {
+    const el = document.getElementById(`cf_${table}_${f.field_key}`);
+    if (!el) continue;
+    values[f.field_key] = f.field_type === 'boolean' ? el.checked : el.value;
+  }
+  return values;
+}
+
+// ============================================================
+// PIELĀGOTO LAUKU DEFINĪCIJU CILNE (admin pārvalda pašus laukus)
+// ============================================================
+const CUSTOM_FIELD_TABLES = [
+  ['assets', 'Iekārtas'], ['tickets', 'Ticketi'], ['applications', 'Aplikācijas'], ['phone_numbers', 'Tālruņu numuri'],
+];
+let customFieldsTabTable = 'assets';
+let customFieldsFullCache = [];
+
+async function renderCustomFieldsTab() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="toolbar">
+      <div class="tabs-inline" id="cfTableTabs"></div>
+      <button class="btn btn-green" onclick="openCustomFieldForm()">+ Pievienot lauku</button>
+    </div>
+    <p class="muted">Šeit pievienotie lauki automātiski parādīsies attiecīgās sadaļas add/edit formā admin panelī, un ticketu laukiem — arī mobilajā aplikācijā.</p>
+    <table id="customFieldsTable"><thead><tr><th>#</th><th>Nosaukums</th><th>Kods</th><th>Tips</th><th>Statuss</th><th></th></tr></thead><tbody></tbody></table>`;
+
+  document.getElementById('cfTableTabs').innerHTML = CUSTOM_FIELD_TABLES.map(([code, label]) =>
+    `<button class="${customFieldsTabTable === code ? 'active' : ''}" onclick="switchCustomFieldsTable('${code}')">${label}</button>`
+  ).join('');
+
+  await loadCustomFieldsTab();
+}
+
+function switchCustomFieldsTable(table) {
+  customFieldsTabTable = table;
+  renderCustomFieldsTab();
+}
+
+async function loadCustomFieldsTab() {
+  const { fields } = await api('/api/custom-fields/all?table=' + customFieldsTabTable);
+  customFieldsFullCache = fields;
+  const typeLabels = { text: 'Teksts', number: 'Skaitlis', boolean: 'Jā/Nē', date: 'Datums', select: 'Izvēlne' };
+  const tbody = document.querySelector('#customFieldsTable tbody');
+  tbody.innerHTML = fields.length ? fields.map((f, idx) => `
+    <tr>
+      <td>
+        <button class="btn btn-sm btn-outline" ${idx === 0 ? 'disabled' : ''} onclick="moveCustomField(${idx}, -1)">↑</button>
+        <button class="btn btn-sm btn-outline" ${idx === fields.length - 1 ? 'disabled' : ''} onclick="moveCustomField(${idx}, 1)">↓</button>
+      </td>
+      <td>${esc(f.label)}</td>
+      <td><code>${esc(f.field_key)}</code></td>
+      <td>${typeLabels[f.field_type]}</td>
+      <td>${f.is_active ? '<span class="badge" style="background:var(--green)">aktīvs</span>' : '<span class="badge" style="background:#999">paslēpts</span>'}</td>
+      <td><button class="btn btn-sm btn-outline" onclick="openCustomFieldForm('${f.id}')">Rediģēt</button></td>
+    </tr>`).join('') : `<tr><td colspan="6" class="empty">Šai sadaļai vēl nav pielāgotu lauku</td></tr>`;
+}
+
+async function moveCustomField(idx, direction) {
+  const swapIdx = idx + direction;
+  if (swapIdx < 0 || swapIdx >= customFieldsFullCache.length) return;
+  const reordered = [...customFieldsFullCache];
+  [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
+  try {
+    await api('/api/custom-fields/reorder', { method: 'POST', body: { tableName: customFieldsTabTable, orderedIds: reordered.map((f) => f.id) } });
+    loadCustomFieldsTab();
+  } catch (e) { alert(e.message); }
+}
+
+function openCustomFieldForm(id) {
+  const field = id ? customFieldsFullCache.find((f) => f.id === id) : null;
+  openModal(`
+    <h2>${field ? 'Rediģēt lauku' : 'Jauns pielāgots lauks'}</h2>
+    <p class="muted">Sadaļa: ${CUSTOM_FIELD_TABLES.find(([c]) => c === customFieldsTabTable)[1]}</p>
+    ${!field ? `
+      <label>Lauka kods (tikai mazie burti, cipari, "_") *</label>
+      <input id="f_cfKey" placeholder="piem. warranty_type" />
+      <label>Lauka tips *</label>
+      <select id="f_cfType" onchange="document.getElementById('cfOptionsRow').style.display = this.value === 'select' ? 'block' : 'none'">
+        <option value="text">Teksts (char)</option>
+        <option value="number">Skaitlis</option>
+        <option value="boolean">Jā/Nē (bit)</option>
+        <option value="date">Datums</option>
+        <option value="select">Izvēlne (fiksētas vērtības)</option>
+      </select>
+    ` : `<p class="muted">Kods: <code>${esc(field.field_key)}</code> · Tips: ${esc(field.field_type)} (nemaināms pēc izveides)</p>`}
+    <label>Redzamais nosaukums *</label>
+    <input id="f_cfLabel" value="${field ? esc(field.label) : ''}" placeholder="piem. Garantijas veids" />
+    <div id="cfOptionsRow" style="display:${field && field.field_type === 'select' ? 'block' : (!field ? 'none' : 'none')}">
+      <label>Izvēles vērtības (katru jaunā rindā)</label>
+      <textarea id="f_cfOptions" rows="3">${field && field.options ? field.options.join('\n') : ''}</textarea>
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:10px">
+      <input type="checkbox" id="f_cfRequired" style="width:auto" ${field && field.is_required ? 'checked' : ''} /> Obligāts lauks
+    </label>
+    ${field ? `<label style="display:flex;align-items:center;gap:6px;font-weight:400;margin-top:6px">
+      <input type="checkbox" id="f_cfActive" style="width:auto" ${field.is_active ? 'checked' : ''} /> Aktīvs (redzams formā)
+    </label>` : ''}
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Atcelt</button>
+      <button class="btn btn-primary" onclick="saveCustomField(${field ? `'${field.id}'` : 'null'})">Saglabāt</button>
+    </div>`);
+  if (field && field.field_type === 'select') {
+    setTimeout(() => { document.getElementById('cfOptionsRow').style.display = 'block'; }, 0);
+  }
+}
+
+async function saveCustomField(id) {
+  const label = document.getElementById('f_cfLabel').value.trim();
+  if (!label) { alert('Nosaukums ir obligāts'); return; }
+  try {
+    if (id) {
+      const field = customFieldsFullCache.find((f) => f.id === id);
+      const payload = { label, isRequired: document.getElementById('f_cfRequired').checked, isActive: document.getElementById('f_cfActive').checked };
+      if (field.field_type === 'select') {
+        payload.options = document.getElementById('f_cfOptions').value.split('\n').map((s) => s.trim()).filter(Boolean);
+      }
+      await api('/api/custom-fields/' + id, { method: 'PATCH', body: payload });
+    } else {
+      const fieldKey = document.getElementById('f_cfKey').value.trim();
+      const fieldType = document.getElementById('f_cfType').value;
+      if (!fieldKey) { alert('Lauka kods ir obligāts'); return; }
+      const payload = {
+        tableName: customFieldsTabTable, fieldKey, label, fieldType,
+        isRequired: document.getElementById('f_cfRequired').checked,
+      };
+      if (fieldType === 'select') {
+        payload.options = document.getElementById('f_cfOptions').value.split('\n').map((s) => s.trim()).filter(Boolean);
+      }
+      await api('/api/custom-fields', { method: 'POST', body: payload });
+    }
+    closeModal(); loadCustomFieldsTab();
+  } catch (e) { alert(e.message); }
 }
 
 // ============================================================
@@ -373,8 +549,16 @@ async function loadAssets() {
     </tr>`).join('') : `<tr><td colspan="7" class="empty">Nav rezultātu</td></tr>`;
 }
 
-function openAssetForm(id) {
+async function openAssetForm(id) {
   const asset = id ? assetsCache.find((a) => a.id === id) : null;
+  await loadCustomFieldDefs('assets');
+  // Iekārtu sarakstā "attributes" nav iekļauts (lai saraksta pieprasījums
+  // paliktu ātrs) -- ja rediģē esošu iekārtu, paņemam pilnos datus atsevišķi.
+  let existingAttributes = {};
+  if (asset) {
+    const { asset: fullAsset } = await api('/api/assets/' + id);
+    existingAttributes = fullAsset.attributes || {};
+  }
   openModal(`
     <h2>${asset ? 'Rediģēt iekārtu' : 'Jauna iekārta'}</h2>
     <label>Inventāra Nr *</label><input id="f_assetTag" value="${asset ? esc(asset.asset_tag) : ''}" ${asset ? 'disabled' : ''} />
@@ -392,6 +576,7 @@ function openAssetForm(id) {
     <label>Garantija līdz</label><input type="date" id="f_warrantyUntil" value="${asset && asset.warranty_until ? asset.warranty_until.slice(0, 10) : ''}" />
     ${asset ? `<label>Statuss</label><select id="f_status">${Object.entries(STATUS_LABELS_LV).map(([k, v]) => `<option value="${k}" ${asset.status === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` : ''}
     <label>Piezīmes</label><textarea id="f_notes" rows="2">${asset ? esc(asset.notes) : ''}</textarea>
+    ${renderCustomFieldsHTML('assets', existingAttributes)}
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Atcelt</button>
       <button class="btn btn-primary" onclick="saveAsset(${asset ? `'${asset.id}'` : 'null'})">Saglabāt</button>
@@ -409,6 +594,7 @@ async function saveAsset(id) {
     purchaseDate: document.getElementById('f_purchaseDate').value || null,
     warrantyUntil: document.getElementById('f_warrantyUntil').value || null,
     notes: document.getElementById('f_notes').value,
+    customFields: collectCustomFieldValues('assets'),
   };
   try {
     if (id) {
@@ -503,14 +689,16 @@ async function loadApplications() {
     </tr>`).join('') : `<tr><td colspan="6" class="empty">Nav rezultātu</td></tr>`;
 }
 
-function openAppForm(id) {
+async function openAppForm(id) {
   const app = id ? appsCache.find((a) => a.id === id) : null;
+  await loadCustomFieldDefs('applications');
   openModal(`
     <h2>${app ? 'Rediģēt aplikāciju' : 'Jauna aplikācija'}</h2>
     <label>Nosaukums *</label><input id="f_appName" value="${app ? esc(app.name) : ''}" />
     <label>Ražotājs</label><input id="f_appVendor" value="${app ? esc(app.vendor) : ''}" />
     <label>Kategorija</label><input id="f_appCategory" value="${app ? esc(app.category) : ''}" placeholder="piem. productivity, security" />
     <label>Apraksts</label><textarea id="f_appDescription" rows="2">${app ? esc(app.description) : ''}</textarea>
+    ${renderCustomFieldsHTML('applications', app?.custom_fields || {})}
     <div class="modal-actions">
       ${app ? `<button class="btn btn-red" onclick="deleteApp('${app.id}')">Dzēst</button>` : ''}
       <button class="btn btn-outline" onclick="closeModal()">Atcelt</button>
@@ -524,6 +712,7 @@ async function saveApp(id) {
     vendor: document.getElementById('f_appVendor').value,
     category: document.getElementById('f_appCategory').value,
     description: document.getElementById('f_appDescription').value,
+    customFields: collectCustomFieldValues('applications'),
   };
   if (!payload.name) { alert('Nosaukums ir obligāts'); return; }
   try {
@@ -613,14 +802,16 @@ async function loadPhones() {
     </tr>`).join('') : `<tr><td colspan="5" class="empty">Nav rezultātu</td></tr>`;
 }
 
-function openPhoneForm(id) {
+async function openPhoneForm(id) {
   const p = id ? phonesCache.find((x) => x.id === id) : null;
+  await loadCustomFieldDefs('phone_numbers');
   openModal(`
     <h2>${p ? 'Rediģēt numuru' : 'Jauns numurs'}</h2>
     <label>Numurs *</label><input id="f_phoneNumber" value="${p ? esc(p.number) : ''}" ${p ? 'disabled' : ''} />
     <label>Operators</label><input id="f_carrier" value="${p ? esc(p.carrier) : ''}" />
     <label>Plāns</label><input id="f_planName" value="${p ? esc(p.plan_name) : ''}" />
     <label>Mēneša maksa (EUR)</label><input type="number" step="0.01" id="f_monthlyCost" value="${p ? p.monthly_cost || '' : ''}" />
+    ${renderCustomFieldsHTML('phone_numbers', p?.custom_fields || {})}
     <div class="modal-actions">
       ${p ? `<button class="btn btn-red" onclick="deletePhone('${p.id}')">Dzēst</button>` : ''}
       <button class="btn btn-outline" onclick="closeModal()">Atcelt</button>
@@ -633,6 +824,7 @@ async function savePhone(id) {
     carrier: document.getElementById('f_carrier').value,
     planName: document.getElementById('f_planName').value,
     monthlyCost: parseFloat(document.getElementById('f_monthlyCost').value) || null,
+    customFields: collectCustomFieldValues('phone_numbers'),
   };
   try {
     if (id) await api('/api/phone-numbers/' + id, { method: 'PATCH', body: payload });
