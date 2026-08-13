@@ -520,9 +520,7 @@ async function renderAssetsTab() {
         <button class="btn btn-green" onclick="openAssetForm()">+ Pievienot iekārtu</button>
       </div>
     </div>
-    <table id="assetsTable"><thead><tr>
-      <th>Inv. Nr</th><th>Nosaukums</th><th>Kategorija</th><th>Statuss</th><th>Turētājs</th><th>Atrašanās vieta</th><th></th>
-    </tr></thead><tbody></tbody></table>`;
+    <table id="assetsTable"><thead><tr id="assetsTableHead"></tr></thead><tbody></tbody></table>`;
   await loadAssets();
 }
 
@@ -534,8 +532,17 @@ async function loadAssets() {
   if (search) params.set('search', search);
   if (category) params.set('category', category);
   if (status) params.set('status', status);
-  const { assets } = await api('/api/assets?' + params.toString());
+  const [{ assets }, customFieldDefs] = await Promise.all([
+    api('/api/assets?' + params.toString()),
+    loadCustomFieldDefs('assets'),
+  ]);
   assetsCache = assets;
+
+  document.getElementById('assetsTableHead').innerHTML =
+    `<th>Inv. Nr</th><th>Nosaukums</th><th>Kategorija</th><th>Statuss</th><th>Turētājs</th><th>Atrašanās vieta</th>` +
+    customFieldDefs.map((f) => `<th>${esc(f.label)}</th>`).join('') +
+    `<th></th>`;
+
   const tbody = document.querySelector('#assetsTable tbody');
   tbody.innerHTML = assets.length ? assets.map((a) => `
     <tr class="clickable" onclick="openAssetDetail('${a.id}')">
@@ -545,8 +552,13 @@ async function loadAssets() {
       <td><span class="badge" style="background:#888">${STATUS_LABELS_LV[a.status] || a.status}</span></td>
       <td>${esc(a.current_holder) || 'IT nodaļa'}</td>
       <td>${esc(a.location) || '—'}</td>
+      ${customFieldDefs.map((f) => {
+        const val = (a.attributes || {})[f.field_key];
+        const display = f.field_type === 'boolean' ? (val ? '✓' : '—') : (val ?? '—');
+        return `<td>${esc(display)}</td>`;
+      }).join('')}
       <td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); openAssetForm('${a.id}')">Rediģēt</button></td>
-    </tr>`).join('') : `<tr><td colspan="7" class="empty">Nav rezultātu</td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="${7 + customFieldDefs.length}" class="empty">Nav rezultātu</td></tr>`;
 }
 
 async function openAssetForm(id) {
@@ -672,21 +684,35 @@ async function renderApplicationsTab() {
         <button class="btn btn-green" onclick="openAppForm()">+ Pievienot aplikāciju</button>
       </div>
     </div>
-    <table id="appsTable"><thead><tr><th>Nosaukums</th><th>Ražotājs</th><th>Kategorija</th><th>Aktīvie lietotāji</th><th>Licences (vietas)</th><th></th></tr></thead><tbody></tbody></table>`;
+    <table id="appsTable"><thead><tr id="appsTableHead"></tr></thead><tbody></tbody></table>`;
   await loadApplications();
 }
 
 async function loadApplications() {
   const search = document.getElementById('appSearch').value;
-  const { applications } = await api('/api/applications' + (search ? '?search=' + encodeURIComponent(search) : ''));
+  const [{ applications }, customFieldDefs] = await Promise.all([
+    api('/api/applications' + (search ? '?search=' + encodeURIComponent(search) : '')),
+    loadCustomFieldDefs('applications'),
+  ]);
   appsCache = applications;
+
+  document.getElementById('appsTableHead').innerHTML =
+    `<th>Nosaukums</th><th>Ražotājs</th><th>Kategorija</th><th>Aktīvie lietotāji</th><th>Licences (vietas)</th>` +
+    customFieldDefs.map((f) => `<th>${esc(f.label)}</th>`).join('') +
+    `<th></th>`;
+
   const tbody = document.querySelector('#appsTable tbody');
   tbody.innerHTML = applications.length ? applications.map((a) => `
     <tr class="clickable" onclick="openAppDetail('${a.id}')">
       <td>${esc(a.name)}</td><td>${esc(a.vendor) || '—'}</td><td>${esc(a.category) || '—'}</td>
       <td>${a.active_assignments}</td><td>${a.seats_total}</td>
+      ${customFieldDefs.map((f) => {
+        const val = (a.custom_fields || {})[f.field_key];
+        const display = f.field_type === 'boolean' ? (val ? '✓' : '—') : (val ?? '—');
+        return `<td>${esc(display)}</td>`;
+      }).join('')}
       <td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); openAppForm('${a.id}')">Rediģēt</button></td>
-    </tr>`).join('') : `<tr><td colspan="6" class="empty">Nav rezultātu</td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="${6 + customFieldDefs.length}" class="empty">Nav rezultātu</td></tr>`;
 }
 
 async function openAppForm(id) {
@@ -783,23 +809,39 @@ async function renderPhonesTab() {
         <button class="btn btn-green" onclick="openPhoneForm()">+ Pievienot numuru</button>
       </div>
     </div>
-    <table id="phonesTable"><thead><tr><th>Numurs</th><th>Operators</th><th>Plāns</th><th>Turētājs</th><th></th></tr></thead><tbody></tbody></table>`;
+    <table id="phonesTable"><thead><tr id="phonesTableHead"></tr></thead><tbody></tbody></table>`;
   await loadPhones();
 }
 
 async function loadPhones() {
-  const { phoneNumbers } = await api('/api/phone-numbers');
+  const [{ phoneNumbers }, customFieldDefs] = await Promise.all([
+    api('/api/phone-numbers'),
+    loadCustomFieldDefs('phone_numbers'),
+  ]);
   phonesCache = phoneNumbers;
+
+  // Galvene tiek veidota DINAMISKI -- katrs aktīvais pielāgotais lauks kļūst
+  // par savu kolonnu sarakstā, ne tikai redzams pievienošanas formā.
+  document.getElementById('phonesTableHead').innerHTML =
+    `<th>Numurs</th><th>Operators</th><th>Plāns</th><th>Turētājs</th>` +
+    customFieldDefs.map((f) => `<th>${esc(f.label)}</th>`).join('') +
+    `<th></th>`;
+
   const tbody = document.querySelector('#phonesTable tbody');
   tbody.innerHTML = phoneNumbers.length ? phoneNumbers.map((p) => `
     <tr>
       <td>${esc(p.number)}</td><td>${esc(p.carrier) || '—'}</td><td>${esc(p.plan_name) || '—'}</td>
       <td>${esc(p.current_holder) || '—'}</td>
+      ${customFieldDefs.map((f) => {
+        const val = (p.custom_fields || {})[f.field_key];
+        const display = f.field_type === 'boolean' ? (val ? '✓' : '—') : (val ?? '—');
+        return `<td>${esc(display)}</td>`;
+      }).join('')}
       <td>
         <button class="btn btn-sm btn-outline" onclick="openPhoneAssign('${p.id}')">Piešķirt</button>
         <button class="btn btn-sm btn-outline" onclick="openPhoneForm('${p.id}')">Rediģēt</button>
       </td>
-    </tr>`).join('') : `<tr><td colspan="5" class="empty">Nav rezultātu</td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="${5 + customFieldDefs.length}" class="empty">Nav rezultātu</td></tr>`;
 }
 
 async function openPhoneForm(id) {
@@ -976,11 +1018,14 @@ const IMPORT_FIELD_SETS = {
   applications: [['name', 'Nosaukums *'], ['vendor', 'Ražotājs'], ['category', 'Kategorija'], ['description', 'Apraksts']],
   'phone-numbers': [['number', 'Numurs *'], ['carrier', 'Operators'], ['planName', 'Plāns'], ['monthlyCost', 'Mēneša maksa']],
 };
+// importState.target ('phone-numbers') -> custom_field_definitions.table_name ('phone_numbers')
+const IMPORT_TARGET_TO_CF_TABLE = { assets: 'assets', applications: 'applications', 'phone-numbers': 'phone_numbers' };
 
-let importState = { target: null, csvRows: [], csvHeaders: [] };
+let importState = { target: null, csvRows: [], csvHeaders: [], customFieldDefs: [] };
 
-function openImportModal(target) {
-  importState = { target, csvRows: [], csvHeaders: [] };
+async function openImportModal(target) {
+  importState = { target, csvRows: [], csvHeaders: [], customFieldDefs: [] };
+  importState.customFieldDefs = await loadCustomFieldDefs(IMPORT_TARGET_TO_CF_TABLE[target]);
   openModal(`
     <h2>Importēt no CSV</h2>
     <p class="muted">Eksportējiet sarakstu no Monday.com kā CSV (board → ⋯ izvēlne → Export board / Export to Excel/CSV), tad augšupielādējiet šeit failu.</p>
@@ -1008,6 +1053,7 @@ function handleCsvFile(event) {
 
 function renderImportMapping() {
   const fields = IMPORT_FIELD_SETS[importState.target];
+  const customFields = importState.customFieldDefs; // pielāgotie lauki -- arī tos var sasaistīt ar CSV kolonnu
   const headers = importState.csvHeaders;
   const area = document.getElementById('importMappingArea');
   area.innerHTML = `
@@ -1020,6 +1066,15 @@ function renderImportMapping() {
           ${headers.map((h) => `<option value="${esc(h)}" ${h.toLowerCase() === label.toLowerCase().replace(' *', '') ? 'selected' : ''}>${esc(h)}</option>`).join('')}
         </select>
       </div>`).join('')}
+    ${customFields.length ? `<p class="muted" style="margin-top:10px">Pielāgotie lauki:</p>` : ''}
+    ${customFields.map((f) => `
+      <div class="map-row">
+        <label>${esc(f.label)}${f.field_type === 'boolean' ? ' (1/0, jā/nē)' : ''}</label>
+        <select id="map_cf__${f.field_key}">
+          <option value="">— neizmantot —</option>
+          ${headers.map((h) => `<option value="${esc(h)}" ${h.toLowerCase() === f.field_key.toLowerCase() || h.toLowerCase() === f.label.toLowerCase() ? 'selected' : ''}>${esc(h)}</option>`).join('')}
+        </select>
+      </div>`).join('')}
     <div class="import-preview"><table><thead><tr>${headers.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead>
       <tbody>${importState.csvRows.slice(0, 5).map((r) => `<tr>${headers.map((h) => `<td>${esc(r[h])}</td>`).join('')}</tr>`).join('')}</tbody>
     </table></div>
@@ -1027,14 +1082,32 @@ function renderImportMapping() {
     <div id="importResult"></div>`;
 }
 
+// CSV vērtības kā "1", "0", "true", "false", "jā", "nē", "yes", "no" -- visas
+// jāpārvērš par īstu true/false, lai jā/nē (boolean) tipa lauki strādātu pareizi.
+function parseBooleanCsvValue(raw) {
+  if (raw === undefined || raw === null) return false;
+  const v = String(raw).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'y', 'ja', 'jā', 'x'].includes(v);
+}
+
 async function runImport() {
   const fields = IMPORT_FIELD_SETS[importState.target];
+  const customFields = importState.customFieldDefs;
   const mapping = {};
   fields.forEach(([key]) => { mapping[key] = document.getElementById('map_' + key).value; });
+  const cfMapping = {};
+  customFields.forEach((f) => { cfMapping[f.field_key] = document.getElementById('map_cf__' + f.field_key).value; });
 
   const rows = importState.csvRows.map((row) => {
     const mapped = {};
     fields.forEach(([key]) => { if (mapping[key]) mapped[key] = row[mapping[key]]; });
+    const customValues = {};
+    customFields.forEach((f) => {
+      if (!cfMapping[f.field_key]) return;
+      const raw = row[cfMapping[f.field_key]];
+      customValues[f.field_key] = f.field_type === 'boolean' ? parseBooleanCsvValue(raw) : raw;
+    });
+    if (Object.keys(customValues).length > 0) mapped.customFields = customValues;
     return mapped;
   });
 
