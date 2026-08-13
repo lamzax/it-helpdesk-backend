@@ -1,6 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 const { requireAuth } = require('../middleware/auth');
 
@@ -16,8 +17,17 @@ router.use(requireAuth);
 const ALLOWED_MIME_PREFIXES = ['image/', 'video/', 'audio/'];
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB -- pietiek foto/video/balss ziņai
 
+// "uploads" mape var neeksistēt servera diskā (piem. GitHub necopē tukšas
+// mapes, vai Render katru reizi sāk no tīra diska) -- tāpēc to IZVEIDOJAM
+// PAŠI servera palaišanas brīdī, nevis paļaujamies, ka tā jau ir tur.
+const uploadsDir = path.join(__dirname, '../../uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('Izveidota uploads mape:', uploadsDir);
+}
+
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, path.join(__dirname, '../../uploads')),
+  destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname) || '';
     const unique = crypto.randomBytes(8).toString('hex');
