@@ -15,6 +15,7 @@ const accessRightsRouter = require('./routes/accessRights');
 const importRouter = require('./routes/importData');
 const uploadsRouter = require('./routes/uploads');
 const customFieldsRouter = require('./routes/customFields');
+const subcategoriesRouter = require('./routes/subcategories');
 
 const app = express();
 app.use(helmet({ contentSecurityPolicy: false })); // atslegts CSP, lai admin panelis var ielādēt CDN skriptus (PapaParse)
@@ -34,6 +35,7 @@ app.use('/api/access-rights', accessRightsRouter);
 app.use('/api/import', importRouter);
 app.use('/api/uploads', uploadsRouter);
 app.use('/api/custom-fields', customFieldsRouter);
+app.use('/api/subcategories', subcategoriesRouter);
 
 // Augšupielādētie pielikumi (foto/video/balss ziņas) -- pieejami statiski
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
