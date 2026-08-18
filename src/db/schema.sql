@@ -65,6 +65,19 @@ CREATE TABLE sla_policies (
     UNIQUE (category_id, priority)
 );
 
+-- Apakškategorijas (piem. "Laptops" zem "Personīgās iekārtas")
+CREATE TABLE subcategories (
+    id              SMALLSERIAL PRIMARY KEY,
+    category_id     SMALLINT NOT NULL REFERENCES categories(id),
+    name_lv         TEXT NOT NULL,
+    name_en         TEXT NOT NULL,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    is_active       BOOLEAN NOT NULL DEFAULT true,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (category_id, name_lv)
+);
+CREATE INDEX idx_subcategories_category ON subcategories (category_id, sort_order);
+
 -- ============================================================
 -- 3. IEKARTU (ASSET) PARVALDIBA
 -- ============================================================
@@ -275,6 +288,8 @@ CREATE TABLE tickets (
                         CHECK (priority IN ('low','medium','high','critical')),
     source          TEXT NOT NULL DEFAULT 'mobile'
                         CHECK (source IN ('mobile','web','qr')),
+    subcategory_id  SMALLINT REFERENCES subcategories(id),
+    application_id  UUID REFERENCES applications(id),
     custom_fields   JSONB NOT NULL DEFAULT '{}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -396,12 +411,38 @@ CREATE TRIGGER trg_close_prev_assignment
 -- 9. SEED DATI
 -- ============================================================
 
+-- Kategorijas (divlīmeņu sistēma: kategorija + apakškategorija)
 INSERT INTO categories (code, name_lv, name_en, default_priority, sort_order) VALUES
-    ('lan',          'LAN tikls',              'LAN network',       'high',   1),
-    ('wifi',         'WiFi',                   'WiFi',              'medium', 2),
-    ('cameras',      'Noverosanas kameras',    'CCTV Cameras',      'medium', 3),
-    ('internal_app', 'Ieksejā lietojumprogramma', 'Internal application', 'medium', 4),
-    ('other',        'Cits IT jautajums',      'Other IT issue',    'low',    5);
+    ('personal_devices', 'Personīgās iekārtas', 'Personal devices', 'medium', 1),
+    ('printers',         'Printeri',            'Printers',         'medium', 2),
+    ('network_server',   'Tīkls/Serveris',      'Network/Server',   'high',   3),
+    ('programs',         'Programmas',          'Programs',         'medium', 4);
+
+INSERT INTO subcategories (category_id, name_lv, name_en, sort_order)
+SELECT c.id, v.name_lv, v.name_en, v.ord FROM categories c,
+    (VALUES ('Laptops','Laptop',1),('Telefons','Phone',2),('Monitors','Monitor',3),
+            ('Klaviatūra','Keyboard',4),('Pele','Mouse',5),('Planšete','Tablet',6)
+    ) AS v(name_lv, name_en, ord)
+WHERE c.code = 'personal_devices';
+
+INSERT INTO subcategories (category_id, name_lv, name_en, sort_order)
+SELECT c.id, v.name_lv, v.name_en, v.ord FROM categories c,
+    (VALUES ('1.stāvs','1st floor',1),('2.stāvs','2nd floor',2),('3.stāvs','3rd floor',3),
+            ('Serviss','Service',4),('Zebra','Zebra',5),('Brother','Brother',6)
+    ) AS v(name_lv, name_en, ord)
+WHERE c.code = 'printers';
+
+INSERT INTO subcategories (category_id, name_lv, name_en, sort_order)
+SELECT c.id, v.name_lv, v.name_en, v.ord FROM categories c,
+    (VALUES ('WiFi tīkls','WiFi network',1),('Vada tīkls','Wired network',2),('Proxmox','Proxmox',3),
+            ('Pritunl','Pritunl',4),('Terminal','Terminal',5),('APP','APP',6),('SQL','SQL',7),
+            ('Unifi','Unifi',8),('Servertelpa-SW','Server room SW',9),('Ražošanas SW','Production SW',10),
+            ('Router','Router',11),('QNAP','QNAP',12),('UPS','UPS',13),
+            ('Loģistikas meeting room','Logistics meeting room',14),('Meeting room','Meeting room',15)
+    ) AS v(name_lv, name_en, ord)
+WHERE c.code = 'network_server';
+-- "Programmas" kategorijai apakškategorijas nav statiskas -- tās nāk tieši
+-- no "applications" tabulas (skat. INSERT INTO applications zemāk).
 
 INSERT INTO sla_policies (category_id, priority, response_minutes, resolve_minutes)
 SELECT id, 'critical', 15, 240 FROM categories
@@ -433,3 +474,13 @@ INSERT INTO access_systems (code, name, description) VALUES
     ('wifi_iot',     'WiFi (IoT ierices)',       'Atsevisks WiFi tikls IoT/viedajam ierices'),
     ('vpn_computer', 'VPN (dators)',             'VPN piekluve no darba/personigā datora'),
     ('vpn_phone',    'VPN (telefons)',           'VPN piekluve no mobila telefona');
+
+-- Sākotnēji reģistrētās programmas -- kalpo par "Programmas" kategorijas
+-- apakškategoriju sarakstu ticketa formā (skat. subcategories piezīmi augstāk)
+INSERT INTO applications (name, vendor, category) VALUES
+    ('Axapta', NULL, 'registered'), ('MyCargo', NULL, 'registered'), ('Mapon', NULL, 'registered'),
+    ('Edge', NULL, 'registered'), ('Word', NULL, 'registered'), ('Excel', NULL, 'registered'),
+    ('Outlook', NULL, 'registered'), ('Teams', NULL, 'registered'), ('Whatsapp', NULL, 'registered'),
+    ('Monday', NULL, 'registered'), ('Chrome', NULL, 'registered'), ('Sharepoint', NULL, 'registered'),
+    ('OneDrive', NULL, 'registered'), ('Qlik', NULL, 'registered'), ('Svari', NULL, 'registered'),
+    ('AVS', NULL, 'registered'), ('Eparaksts', NULL, 'registered');
