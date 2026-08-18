@@ -5,6 +5,23 @@ const { sanitizeCustomFields } = require('../utils/customFields');
 
 const router = express.Router();
 router.use(requireAuth);
+
+// GET /api/applications/list -- vienkāršs saraksts (id, name), pieejams JEBKURAM
+// pieteiktam lietotājam (ne tikai agent/admin) -- to izmanto ticketa forma,
+// lai darbinieks varētu izvēlēties reģistrētu programmu, kad kategorija ir
+// "Cits jautājums". Šis maršruts ir novietots PIRMS requireRole('agent','admin')
+// rindas apzināti, lai uz to šis ierobežojums neattiektos.
+router.get('/list', async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, name FROM applications WHERE is_active = true ORDER BY name'
+    );
+    res.json({ applications: result.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.use(requireRole('agent', 'admin'));
 
 // GET /api/applications?search=office

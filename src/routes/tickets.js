@@ -17,7 +17,7 @@ async function generateTicketNumber(client) {
   return `HD-${year}-${next}`;
 }
 
-// GET /api/tickets?status=new&category=lan&mine=true&page=1&pageSize=20
+// GET /api/tickets?status=new&category=personal_devices&mine=true&page=1&pageSize=20
 router.get('/', async (req, res) => {
   const { status, category, mine, page = 1, pageSize = 20 } = req.query;
   const conditions = [];
@@ -42,69 +42,90 @@ router.get('/', async (req, res) => {
   const offset = (Math.max(parseInt(page, 10), 1) - 1) * limit;
   params.push(limit, offset);
 
-  const query = `
-    SELECT t.id, t.ticket_number, t.title, t.status, t.priority, t.source,
-           t.created_at, t.updated_at,
-           c.code AS category_code, c.name_lv AS category_name,
-           d.name AS device_name, d.qr_code AS device_qr_code,
-           ru.display_name AS reporter_name,
-           au.display_name AS assignee_name
-    FROM tickets t
-    JOIN categories c ON c.id = t.category_id
-    LEFT JOIN assets d ON d.id = t.asset_id
-    JOIN users ru ON ru.id = t.reporter_id
-    LEFT JOIN users au ON au.id = t.assignee_id
-    ${whereClause}
-    ORDER BY t.created_at DESC
-    LIMIT $${params.length - 1} OFFSET $${params.length}
-  `;
-  const result = await pool.query(query, params);
-  res.json({ tickets: result.rows, page: Number(page), pageSize: limit });
+  try {
+    const query = `
+      SELECT t.id, t.ticket_number, t.title, t.description, t.status, t.priority, t.source,
+             t.created_at, t.updated_at,
+             c.code AS category_code, c.name_lv AS category_name,
+             sc.name_lv AS subcategory_name,
+             app.name AS application_name,
+             d.name AS device_name, d.qr_code AS device_qr_code,
+             ru.display_name AS reporter_name,
+             au.display_name AS assignee_name,
+             (SELECT COUNT(*)::int FROM ticket_attachments ta WHERE ta.ticket_id = t.id) AS attachment_count
+      FROM tickets t
+      JOIN categories c ON c.id = t.category_id
+      LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
+      LEFT JOIN applications app ON app.id = t.application_id
+      LEFT JOIN assets d ON d.id = t.asset_id
+      JOIN users ru ON ru.id = t.reporter_id
+      LEFT JOIN users au ON au.id = t.assignee_id
+      ${whereClause}
+      ORDER BY t.created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+    `;
+    const result = await pool.query(query, params);
+    res.json({ tickets: result.rows, page: Number(page), pageSize: limit });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/tickets/:id  -- pilna detalizacija + komentari + pielikumi
 router.get('/:id', async (req, res) => {
-  const ticketRes = await pool.query(
-    `SELECT t.*, c.code AS category_code, c.name_lv AS category_name,
-            d.name AS device_name, d.qr_code AS device_qr_code, d.location AS device_location,
-            ru.display_name AS reporter_name, ru.email AS reporter_email,
-            au.display_name AS assignee_name
-     FROM tickets t
-     JOIN categories c ON c.id = t.category_id
-     LEFT JOIN assets d ON d.id = t.asset_id
-     JOIN users ru ON ru.id = t.reporter_id
-     LEFT JOIN users au ON au.id = t.assignee_id
-     WHERE t.id = $1`,
-    [req.params.id]
-  );
-  if (ticketRes.rows.length === 0) return res.status(404).json({ error: 'Tickets nav atrasts' });
-  const ticket = ticketRes.rows[0];
+  try {
+    const ticketRes = await pool.query(
+      `SELECT t.*, c.code AS category_code, c.name_lv AS category_name,
+              sc.name_lv AS subcategory_name,
+              app.name AS application_name,
+              d.name AS device_name, d.qr_code AS device_qr_code, d.location AS device_location,
+              ru.display_name AS reporter_name, ru.email AS reporter_email,
+              au.display_name AS assignee_name
+       FROM tickets t
+       JOIN categories c ON c.id = t.category_id
+       LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
+       LEFT JOIN applications app ON app.id = t.application_id
+       LEFT JOIN assets d ON d.id = t.asset_id
+       JOIN users ru ON ru.id = t.reporter_id
+       LEFT JOIN users au ON au.id = t.assignee_id
+       WHERE t.id = $1`,
+      [req.params.id]
+    );
+    if (ticketRes.rows.length === 0) return res.status(404).json({ error: 'Tickets nav atrasts' });
+    const ticket = ticketRes.rows[0];
 
-  if (req.user.role === 'requester' && ticket.reporter_id !== req.user.id) {
-    return res.status(403).json({ error: 'Nav piekluves sim ticketam' });
+    if (req.user.role === 'requester' && ticket.reporter_id !== req.user.id) {
+      return res.status(403).json({ error: 'Nav piekluves sim ticketam' });
+    }
+
+    const comments = await pool.query(
+      `SELECT tc.id, tc.body, tc.is_internal, tc.created_at, u.display_name AS author_name
+       FROM ticket_comments tc JOIN users u ON u.id = tc.author_id
+       WHERE tc.ticket_id = $1
+         AND (tc.is_internal = false OR $2 != 'requester')
+       ORDER BY tc.created_at ASC`,
+      [req.params.id, req.user.role]
+    );
+
+    const attachments = await pool.query(
+      `SELECT id, file_url, file_name, mime_type, created_at FROM ticket_attachments WHERE ticket_id = $1`,
+      [req.params.id]
+    );
+
+    res.json({ ticket, comments: comments.rows, attachments: attachments.rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-
-  const comments = await pool.query(
-    `SELECT tc.id, tc.body, tc.is_internal, tc.created_at, u.display_name AS author_name
-     FROM ticket_comments tc JOIN users u ON u.id = tc.author_id
-     WHERE tc.ticket_id = $1
-       AND (tc.is_internal = false OR $2 != 'requester')
-     ORDER BY tc.created_at ASC`,
-    [req.params.id, req.user.role]
-  );
-
-  const attachments = await pool.query(
-    `SELECT id, file_url, file_name, mime_type, created_at FROM ticket_attachments WHERE ticket_id = $1`,
-    [req.params.id]
-  );
-
-  res.json({ ticket, comments: comments.rows, attachments: attachments.rows });
 });
 
 // POST /api/tickets -- jauna ticketa registresana no mobilas aplikacijas
-// body: { title, description, categoryCode, qrCode?, priority?, attachmentUrls?: [] }
+// body: { title, description, categoryCode, subcategoryId?, applicationId?,
+//         qrCode?, assetId?, priority?, attachmentUrls?: [], customFields? }
 router.post('/', async (req, res) => {
-  const { title, description, categoryCode, qrCode, assetId: assetIdInput, priority, attachmentUrls = [], customFields } = req.body;
+  const {
+    title, description, categoryCode, subcategoryId, applicationId,
+    qrCode, assetId: assetIdInput, priority, attachmentUrls = [], customFields,
+  } = req.body;
   if (!title || !categoryCode) {
     return res.status(400).json({ error: 'title un categoryCode ir obligati' });
   }
@@ -132,12 +153,27 @@ router.post('/', async (req, res) => {
       // lai lietotajs netiek bloketes ja uzlima vel nav reistreta sistema.
     }
 
+    // Apakškategorija (piem. "Laptops") VAI konkrēta reģistrēta programma
+    // (kad kategorija ir "Programmas") -- validējam, ka ID tiešām eksistē.
+    let validSubcategoryId = null;
+    if (subcategoryId) {
+      const scRes = await client.query('SELECT id FROM subcategories WHERE id = $1', [subcategoryId]);
+      if (scRes.rows.length > 0) validSubcategoryId = scRes.rows[0].id;
+    }
+    let validApplicationId = null;
+    if (applicationId) {
+      const appRes = await client.query('SELECT id FROM applications WHERE id = $1', [applicationId]);
+      if (appRes.rows.length > 0) validApplicationId = appRes.rows[0].id;
+    }
+
     const ticketNumber = await generateTicketNumber(client);
     const ticketRes = await client.query(
       `INSERT INTO tickets (ticket_number, title, description, category_id, asset_id,
+                             subcategory_id, application_id,
                              reporter_id, priority, source, custom_fields)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'mobile',$8) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'mobile',$10) RETURNING *`,
       [ticketNumber, title, description || null, category.id, assetId,
+       validSubcategoryId, validApplicationId,
        req.user.id, priority || category.default_priority, JSON.stringify(sanitizedCustom)]
     );
     const ticket = ticketRes.rows[0];
@@ -205,12 +241,16 @@ router.post('/:id/comments', async (req, res) => {
   if (isInternal && req.user.role === 'requester') {
     return res.status(403).json({ error: 'Requesteri nevar veidot ieksejos komentarus' });
   }
-  const result = await pool.query(
-    `INSERT INTO ticket_comments (ticket_id, author_id, body, is_internal)
-     VALUES ($1,$2,$3,$4) RETURNING *`,
-    [req.params.id, req.user.id, body, isInternal]
-  );
-  res.status(201).json({ comment: result.rows[0] });
+  try {
+    const result = await pool.query(
+      `INSERT INTO ticket_comments (ticket_id, author_id, body, is_internal)
+       VALUES ($1,$2,$3,$4) RETURNING *`,
+      [req.params.id, req.user.id, body, isInternal]
+    );
+    res.status(201).json({ comment: result.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;
