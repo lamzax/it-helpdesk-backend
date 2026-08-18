@@ -82,14 +82,21 @@ function renderNav() {
   ).join('');
 }
 
-function setTab(tab) { state.tab = tab; renderNav(); renderTab(); }
+function setTab(tab) {
+  clearInterval(ticketsPollInterval);
+  state.tab = tab; renderNav(); renderTab();
+}
 
 function renderTab() {
   const map = { tickets: renderTicketsTab, assets: renderAssetsTab, applications: renderApplicationsTab, phones: renderPhonesTab, access: renderAccessTab, employees: renderEmployeesTab, categories: renderCategoriesTab, customFields: renderCustomFieldsTab };
   map[state.tab]();
 }
 
-function closeModal() { document.getElementById('overlay').classList.remove('open'); }
+function closeModal() {
+  document.getElementById('overlay').classList.remove('open');
+  clearInterval(ticketDetailPollInterval);
+  currentTicketDetailId = null;
+}
 function openModal(html) { document.getElementById('modalContent').innerHTML = html; document.getElementById('overlay').classList.add('open'); }
 
 function fmtDate(d) { return d ? new Date(d).toLocaleDateString('lv-LV') : '—'; }
@@ -104,7 +111,11 @@ const PRIORITY_LABELS_LV = { low: 'Zema', medium: 'Vidēja', high: 'Augsta', cri
 const PRIORITY_COLORS = { low: '#888', medium: '#e8a33d', high: '#e0641f', critical: 'var(--red)' };
 const STATUS_COLORS = { new: 'var(--blue)', in_progress: '#e8a33d', waiting: '#888', resolved: 'var(--green)', closed: '#555' };
 
+let ticketsPollInterval = null;
+const TICKETS_POLL_MS = 15000; // saraksts atsvaidzinās automātiski, lai admin redzētu jaunus/mainītus ticketus bez manuālas pārlādes
+
 async function renderTicketsTab() {
+  const { categories: ticketCats } = await api('/api/categories');
   const main = document.getElementById('mainContent');
   main.innerHTML = `
     <div class="toolbar">
@@ -115,17 +126,17 @@ async function renderTicketsTab() {
         </select>
         <select id="ticketCategoryFilter" onchange="loadTickets()">
           <option value="">Visas kategorijas</option>
-          <option value="lan">LAN tīkls</option><option value="wifi">WiFi</option>
-          <option value="cameras">Novērošanas kameras</option><option value="internal_app">Iekšējā lietojumprogramma</option>
-          <option value="other">Cits IT jautājums</option>
+          ${ticketCats.map((c) => `<option value="${c.code}">${esc(c.name_lv)}</option>`).join('')}
         </select>
       </div>
       <div></div>
     </div>
     <table id="ticketsTable"><thead><tr>
-      <th>Nr</th><th>Nosaukums</th><th>Kategorija</th><th>Prioritāte</th><th>Statuss</th><th>Pieteica</th><th>Datums</th>
+      <th>Nr</th><th>Nosaukums</th><th>Kategorija</th><th>Apakškat. / Programma</th><th>Prioritāte</th><th>Statuss</th><th>Pieteica</th><th>Datums</th>
     </tr></thead><tbody></tbody></table>`;
   await loadTickets();
+  clearInterval(ticketsPollInterval);
+  ticketsPollInterval = setInterval(loadTickets, TICKETS_POLL_MS);
 }
 
 async function loadTickets() {
@@ -142,18 +153,38 @@ async function loadTickets() {
       <td>${esc(t.ticket_number)}</td>
       <td>${esc(t.title)}</td>
       <td>${esc(t.category_name)}</td>
+      <td>${esc(t.subcategory_name) || esc(t.application_name) || '—'}</td>
       <td><span class="badge" style="background:${PRIORITY_COLORS[t.priority]}">${PRIORITY_LABELS_LV[t.priority]}</span></td>
       <td><span class="badge" style="background:${STATUS_COLORS[t.status]}">${TICKET_STATUS_LV[t.status]}</span></td>
       <td>${esc(t.reporter_name)}</td>
       <td>${fmtDateTime(t.created_at)}</td>
-    </tr>`).join('') : `<tr><td colspan="7" class="empty">Nav ticketu</td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="8" class="empty">Nav ticketu</td></tr>`;
+}
+
+let ticketDetailPollInterval = null;
+let currentTicketDetailId = null;
+const TICKET_DETAIL_POLL_MS = 8000;
+
+function attachmentIconOrThumb(a) {
+  const mime = a.mime_type || '';
+  const fullUrl = a.file_url;
+  if (mime.startsWith('image/')) {
+    return `<a href="${esc(fullUrl)}" target="_blank"><img src="${esc(fullUrl)}" class="attachment-thumb" alt="${esc(a.file_name || '')}" /></a>`;
+  }
+  const icon = mime.startsWith('video/') ? '🎥' : mime.startsWith('audio/') ? '🎙️' : '📎';
+  return `<a href="${esc(fullUrl)}" target="_blank" class="attachment-icon-link">
+    <span class="attachment-icon">${icon}</span><span>${esc(a.file_name || fullUrl)}</span>
+  </a>`;
 }
 
 async function openTicketDetail(id) {
+  currentTicketDetailId = id;
   const { ticket, comments, attachments } = await api('/api/tickets/' + id);
   openModal(`
     <h2>${esc(ticket.ticket_number)} — ${esc(ticket.title)}</h2>
     <p class="muted">${esc(ticket.category_name)} · Pieteica: ${esc(ticket.reporter_name)} (${esc(ticket.reporter_email)}) · ${fmtDateTime(ticket.created_at)}</p>
+    ${ticket.subcategory_name ? `<p class="muted">Apakškategorija: ${esc(ticket.subcategory_name)}</p>` : ''}
+    ${ticket.application_name ? `<p class="muted">Programma: ${esc(ticket.application_name)}</p>` : ''}
     ${ticket.device_name ? `<p class="muted">Iekārta: ${esc(ticket.device_name)}${ticket.device_location ? ' · ' + esc(ticket.device_location) : ''}</p>` : ''}
     ${ticket.description ? `<p>${esc(ticket.description)}</p>` : ''}
 
@@ -163,7 +194,9 @@ async function openTicketDetail(id) {
     </div>
 
     <div class="section-title">Pielikumi</div>
-    ${attachments.length ? attachments.map((a) => `<div class="history-item"><a href="${esc(a.file_url)}" target="_blank">${esc(a.file_name || a.file_url)}</a></div>`).join('') : '<p class="muted">Nav pielikumu</p>'}
+    <div class="attachments-grid">
+      ${attachments.length ? attachments.map((a) => attachmentIconOrThumb(a)).join('') : '<p class="muted">Nav pielikumu</p>'}
+    </div>
 
     <div class="section-title">Komentāri</div>
     <div id="ticketComments">
@@ -177,6 +210,10 @@ async function openTicketDetail(id) {
       <button class="btn btn-outline" onclick="closeModal()">Aizvērt</button>
       <button class="btn btn-primary" onclick="submitTicketComment('${id}')">Nosūtīt komentāru</button>
     </div>`);
+  clearInterval(ticketDetailPollInterval);
+  ticketDetailPollInterval = setInterval(() => {
+    if (currentTicketDetailId === id) openTicketDetail(id);
+  }, TICKET_DETAIL_POLL_MS);
 }
 
 async function changeTicketStatus(id, status) {
@@ -191,6 +228,7 @@ async function submitTicketComment(id) {
   try { await api('/api/tickets/' + id + '/comments', { method: 'POST', body: { body, isInternal } }); openTicketDetail(id); }
   catch (e) { alert(e.message); }
 }
+
 
 // ============================================================
 // PIELĀGOTIE LAUKI (custom fields) -- kopīgas palīgfunkcijas
@@ -379,7 +417,7 @@ async function renderCategoriesTab() {
       <p class="muted" style="margin:0">Secība šeit nosaka, kādā kārtībā kategorijas parādās, aizpildot ticketu mobilajā aplikācijā.</p>
       <button class="btn btn-green" onclick="openCategoryForm()">+ Pievienot kategoriju</button>
     </div>
-    <table id="categoriesTable"><thead><tr><th>#</th><th>Nosaukums (LV)</th><th>Nosaukums (EN)</th><th>Noklusētā prioritāte</th><th>Statuss</th><th></th></tr></thead><tbody></tbody></table>`;
+    <table id="categoriesTable"><thead><tr><th>#</th><th>Nosaukums (LV)</th><th>Nosaukums (EN)</th><th>Noklusētā prioritāte</th><th>Statuss</th><th>Apakškategorijas</th><th></th></tr></thead><tbody></tbody></table>`;
   await loadCategories();
 }
 
@@ -397,8 +435,90 @@ async function loadCategories() {
       <td>${esc(c.name_en)}</td>
       <td>${PRIORITY_LABELS_LV[c.default_priority]}</td>
       <td>${c.is_active ? '<span class="badge" style="background:var(--green)">aktīva</span>' : '<span class="badge" style="background:#999">paslēpta</span>'}</td>
+      <td>
+        ${c.code === 'programs'
+          ? `<span class="muted">Nāk no "Aplikācijas" sadaļas</span>`
+          : `<button class="btn btn-sm btn-outline" onclick="openSubcategoriesModal(${c.id}, '${esc(c.name_lv)}')">Pārvaldīt</button>`}
+      </td>
       <td><button class="btn btn-sm btn-outline" onclick="openCategoryForm(${c.id})">Rediģēt</button></td>
     </tr>`).join('');
+}
+
+// ---------- Apakškategoriju pārvaldība (katrai kategorijai atsevišķi) ----------
+let subcategoriesModalCategoryId = null;
+let subcategoriesFullCache = [];
+
+async function openSubcategoriesModal(categoryId, categoryName) {
+  subcategoriesModalCategoryId = categoryId;
+  openModal(`
+    <h2>Apakškategorijas — ${esc(categoryName)}</h2>
+    <div id="subcategoriesList"></div>
+    <div class="modal-actions" style="justify-content: space-between; margin-top: 16px;">
+      <button class="btn btn-green" onclick="openSubcategoryForm()">+ Pievienot apakškategoriju</button>
+      <button class="btn btn-outline" onclick="closeModal()">Aizvērt</button>
+    </div>`);
+  await loadSubcategoriesList();
+}
+
+async function loadSubcategoriesList() {
+  const { subcategories } = await api('/api/subcategories/all?categoryId=' + subcategoriesModalCategoryId);
+  subcategoriesFullCache = subcategories;
+  const listEl = document.getElementById('subcategoriesList');
+  if (!listEl) return;
+  listEl.innerHTML = subcategories.length ? subcategories.map((s, idx) => `
+    <div class="history-item" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+      <div>
+        <button class="btn btn-sm btn-outline" ${idx === 0 ? 'disabled' : ''} onclick="moveSubcategory(${s.id}, -1)">↑</button>
+        <button class="btn btn-sm btn-outline" ${idx === subcategories.length - 1 ? 'disabled' : ''} onclick="moveSubcategory(${s.id}, 1)">↓</button>
+        ${esc(s.name_lv)}
+        ${s.is_active ? '' : '<span class="badge" style="background:#999">paslēpta</span>'}
+      </div>
+      <button class="btn btn-sm btn-outline" onclick="openSubcategoryForm(${s.id})">Rediģēt</button>
+    </div>`).join('') : '<p class="muted">Vēl nav apakškategoriju</p>';
+}
+
+async function moveSubcategory(id, direction) {
+  const idx = subcategoriesFullCache.findIndex((s) => s.id === id);
+  const swapIdx = idx + direction;
+  if (swapIdx < 0 || swapIdx >= subcategoriesFullCache.length) return;
+  const reordered = [...subcategoriesFullCache];
+  [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
+  try {
+    await api('/api/subcategories/reorder', {
+      method: 'POST',
+      body: { categoryId: subcategoriesModalCategoryId, orderedIds: reordered.map((s) => s.id) },
+    });
+    loadSubcategoriesList();
+  } catch (e) { alert(e.message); }
+}
+
+function openSubcategoryForm(id) {
+  const sub = id ? subcategoriesFullCache.find((s) => s.id === id) : null;
+  openModal(`
+    <h2>${sub ? 'Rediģēt apakškategoriju' : 'Jauna apakškategorija'}</h2>
+    <label>Nosaukums latviski *</label><input id="f_subNameLv" value="${sub ? esc(sub.name_lv) : ''}" />
+    <label>Nosaukums angliski *</label><input id="f_subNameEn" value="${sub ? esc(sub.name_en) : ''}" />
+    ${sub ? `<label>Statuss</label><select id="f_subActive"><option value="true" ${sub.is_active ? 'selected' : ''}>Aktīva</option><option value="false" ${!sub.is_active ? 'selected' : ''}>Paslēpta</option></select>` : ''}
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="openSubcategoriesModal(subcategoriesModalCategoryId, '')">Atcelt</button>
+      <button class="btn btn-primary" onclick="saveSubcategory(${sub ? sub.id : 'null'})">Saglabāt</button>
+    </div>`);
+}
+
+async function saveSubcategory(id) {
+  const nameLv = document.getElementById('f_subNameLv').value.trim();
+  const nameEn = document.getElementById('f_subNameEn').value.trim();
+  if (!nameLv || !nameEn) { alert('Abi nosaukumi ir obligāti'); return; }
+  try {
+    if (id) {
+      const isActive = document.getElementById('f_subActive').value === 'true';
+      await api('/api/subcategories/' + id, { method: 'PATCH', body: { nameLv, nameEn, isActive } });
+    } else {
+      await api('/api/subcategories', { method: 'POST', body: { categoryId: subcategoriesModalCategoryId, nameLv, nameEn } });
+    }
+    const catName = categoriesFullCache.find((c) => c.id === subcategoriesModalCategoryId)?.name_lv || '';
+    await openSubcategoriesModal(subcategoriesModalCategoryId, catName);
+  } catch (e) { alert(e.message); }
 }
 
 async function moveCategory(id, direction) {
