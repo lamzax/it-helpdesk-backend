@@ -66,8 +66,8 @@ router.get('/all', requireRole('admin'), async (req, res) => {
   }
   try {
     const result = await pool.query(
-      `SELECT c.id, c.name_lv, c.name_en, c.parent_id, c.sort_order,
-              p.name_lv AS parent_name
+      `SELECT c.id, c.code, c.name_lv, c.name_en, c.parent_id, c.sort_order,
+              p.name_lv AS parent_name, p.code AS parent_code
        FROM categories c
        LEFT JOIN categories p ON p.id = c.parent_id
        ${where}
@@ -91,8 +91,11 @@ router.post('/', requireRole('admin'), async (req, res) => {
     const resolvedNameEn = nameEn && nameEn.trim() ? nameEn : nameLv;
 
     if (isChild) {
-      const parentRes = await pool.query('SELECT id FROM categories WHERE id = $1 AND parent_id IS NULL', [parentId]);
+      const parentRes = await pool.query('SELECT id, code FROM categories WHERE id = $1 AND parent_id IS NULL', [parentId]);
       if (parentRes.rows.length === 0) return res.status(400).json({ error: 'Norādītā pamatkategorija neeksistē' });
+      if (parentRes.rows[0].code === 'programs') {
+        return res.status(400).json({ error: 'Programmas pievienojiet "Programmas" sadaļā, nevis šeit.' });
+      }
 
       const maxOrder = await pool.query('SELECT COALESCE(MAX(sort_order),0) AS m FROM categories WHERE parent_id = $1', [parentId]);
       const result = await pool.query(
@@ -118,6 +121,16 @@ router.post('/', requireRole('admin'), async (req, res) => {
 router.patch('/:id', requireRole('admin'), async (req, res) => {
   const { nameLv, nameEn } = req.body;
   try {
+    const check = await pool.query(
+      `SELECT c.id, c.code, p.code AS parent_code FROM categories c
+       LEFT JOIN categories p ON p.id = c.parent_id WHERE c.id = $1`,
+      [req.params.id]
+    );
+    if (check.rows.length === 0) return res.status(404).json({ error: 'Kategorija nav atrasta' });
+    if (check.rows[0].code === 'programs' || check.rows[0].parent_code === 'programs') {
+      return res.status(400).json({ error: 'Šo kategoriju pārvaldiet "Programmas" sadaļā, nevis šeit.' });
+    }
+
     const result = await pool.query(
       `UPDATE categories SET name_lv = COALESCE($1, name_lv), name_en = COALESCE($2, name_en)
        WHERE id = $3 RETURNING *`,
@@ -136,6 +149,19 @@ router.patch('/:id', requireRole('admin'), async (req, res) => {
 // atsaucās uz dzēsto kategoriju, tā vienkārši kļūst tukša (nevis bloķē dzēšanu).
 router.delete('/:id', requireRole('admin'), async (req, res) => {
   try {
+    // "Programmas" pamatkategorija un tās apakškategorijas tiek pārvaldītas
+    // AUTOMĀTISKI no "Programmas" (aplikāciju) sadaļas -- tās šeit nedzēšam,
+    // lai neradītu nesakritību starp abām vietām.
+    const check = await pool.query(
+      `SELECT c.id, c.code, p.code AS parent_code FROM categories c
+       LEFT JOIN categories p ON p.id = c.parent_id WHERE c.id = $1`,
+      [req.params.id]
+    );
+    if (check.rows.length === 0) return res.status(404).json({ error: 'Kategorija nav atrasta' });
+    if (check.rows[0].code === 'programs' || check.rows[0].parent_code === 'programs') {
+      return res.status(400).json({ error: 'Šo kategoriju pārvaldiet "Programmas" sadaļā, nevis šeit.' });
+    }
+
     const result = await pool.query('DELETE FROM categories WHERE id = $1 RETURNING id', [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'Kategorija nav atrasta' });
     res.json({ success: true });

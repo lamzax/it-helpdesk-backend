@@ -54,7 +54,10 @@ router.get('/', async (req, res) => {
              d.name AS device_name, d.qr_code AS device_qr_code,
              ru.display_name AS reporter_name,
              au.display_name AS assignee_name,
-             (SELECT COUNT(*)::int FROM ticket_attachments ta WHERE ta.ticket_id = t.id) AS attachment_count
+             (SELECT COUNT(*)::int FROM ticket_attachments ta WHERE ta.ticket_id = t.id) AS attachment_count,
+             (SELECT COALESCE(bool_or(mime_type LIKE 'image/%'), false) FROM ticket_attachments ta WHERE ta.ticket_id = t.id) AS has_image,
+             (SELECT COALESCE(bool_or(mime_type LIKE 'video/%'), false) FROM ticket_attachments ta WHERE ta.ticket_id = t.id) AS has_video,
+             (SELECT COALESCE(bool_or(mime_type LIKE 'audio/%'), false) FROM ticket_attachments ta WHERE ta.ticket_id = t.id) AS has_audio
       FROM tickets t
       LEFT JOIN categories c ON c.id = t.category_id
       LEFT JOIN categories parent_c ON parent_c.id = c.parent_id

@@ -24,6 +24,31 @@ router.get('/list', async (req, res) => {
 
 router.use(requireRole('agent', 'admin'));
 
+// Katrai programmai automātiski uztur ATBILSTOŠU apakškategoriju zem
+// "Programmas" pamatkategorijas -- lai tā ir redzama arī Kategoriju sadaļā,
+// nevis tikai šeit. Atgriež izveidotās/atrastās kategorijas id.
+async function syncProgramCategory(appId, name) {
+  const rootRes = await pool.query(`SELECT id FROM categories WHERE code = 'programs'`);
+  if (rootRes.rows.length === 0) return null;
+  const rootId = rootRes.rows[0].id;
+
+  const existing = await pool.query(
+    'SELECT id FROM categories WHERE parent_id = $1 AND name_lv = $2', [rootId, name]
+  );
+  let categoryId;
+  if (existing.rows.length > 0) {
+    categoryId = existing.rows[0].id;
+  } else {
+    const created = await pool.query(
+      `INSERT INTO categories (name_lv, name_en, parent_id) VALUES ($1,$1,$2) RETURNING id`,
+      [name, rootId]
+    );
+    categoryId = created.rows[0].id;
+  }
+  await pool.query('UPDATE applications SET category_id = $1 WHERE id = $2', [categoryId, appId]);
+  return categoryId;
+}
+
 // GET /api/applications?search=office
 router.get('/', async (req, res) => {
   const { search } = req.query;
@@ -62,40 +87,50 @@ router.get('/:id', async (req, res) => {
   res.json({ application: appRes.rows[0], licenses: licenses.rows, assignments: assignments.rows });
 });
 
-// POST /api/applications -- add
+// POST /api/applications -- add. Kategorija VIENMĒR ir "Programma"
+// (Pamatkategorija) -- katrai programmai automātiski izveido/piesaista
+// atbilstošu apakškategoriju "Programmas" kokā.
 router.post('/', async (req, res) => {
-  const { name, vendor, category, description, customFields } = req.body;
+  const { name, vendor, description, customFields } = req.body;
   if (!name) return res.status(400).json({ error: 'name ir obligats' });
   const sanitizedCustom = await sanitizeCustomFields('applications', customFields);
   const result = await pool.query(
-    'INSERT INTO applications (name, vendor, category, description, custom_fields) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-    [name, vendor || null, category || null, description || null, JSON.stringify(sanitizedCustom)]
+    `INSERT INTO applications (name, vendor, category, description, custom_fields)
+     VALUES ($1,$2,'Programma',$3,$4) RETURNING *`,
+    [name, vendor || null, description || null, JSON.stringify(sanitizedCustom)]
   );
-  res.status(201).json({ application: result.rows[0] });
+  const app = result.rows[0];
+  await syncProgramCategory(app.id, app.name);
+  res.status(201).json({ application: app });
 });
 
-// PATCH /api/applications/:id -- edit
+// PATCH /api/applications/:id -- edit (kategorija vienmēr paliek "Programma")
 router.patch('/:id', async (req, res) => {
-  const { name, vendor, category, description, customFields } = req.body;
+  const { name, vendor, description, customFields } = req.body;
   const sanitizedCustom = customFields !== undefined ? await sanitizeCustomFields('applications', customFields) : null;
   const result = await pool.query(
     `UPDATE applications SET
        name = COALESCE($1, name), vendor = COALESCE($2, vendor),
-       category = COALESCE($3, category), description = COALESCE($4, description),
-       custom_fields = CASE WHEN $6::jsonb IS NOT NULL THEN custom_fields || $6::jsonb ELSE custom_fields END
-     WHERE id = $5 RETURNING *`,
-    [name, vendor, category, description, req.params.id, sanitizedCustom ? JSON.stringify(sanitizedCustom) : null]
+       description = COALESCE($3, description),
+       custom_fields = CASE WHEN $5::jsonb IS NOT NULL THEN custom_fields || $5::jsonb ELSE custom_fields END
+     WHERE id = $4 RETURNING *`,
+    [name, vendor, description, req.params.id, sanitizedCustom ? JSON.stringify(sanitizedCustom) : null]
   );
-  if (result.rows.length === 0) return res.status(404).json({ error: 'Aplikācija nav atrasta' });
-  res.json({ application: result.rows[0] });
+  if (result.rows.length === 0) return res.status(404).json({ error: 'Programma nav atrasta' });
+  const app = result.rows[0];
+  if (name) await syncProgramCategory(app.id, app.name); // pārsauc arī saistīto kategoriju
+  res.json({ application: app });
 });
 
-// DELETE /api/applications/:id -- soft delete
+// DELETE /api/applications/:id -- soft delete + izdzēš saistīto apakškategoriju
 router.delete('/:id', async (req, res) => {
   const result = await pool.query(
-    'UPDATE applications SET is_active = false WHERE id = $1 RETURNING id', [req.params.id]
+    'UPDATE applications SET is_active = false WHERE id = $1 RETURNING id, category_id', [req.params.id]
   );
-  if (result.rows.length === 0) return res.status(404).json({ error: 'Aplikācija nav atrasta' });
+  if (result.rows.length === 0) return res.status(404).json({ error: 'Programma nav atrasta' });
+  if (result.rows[0].category_id) {
+    await pool.query('DELETE FROM categories WHERE id = $1', [result.rows[0].category_id]);
+  }
   res.json({ success: true });
 });
 

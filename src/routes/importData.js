@@ -26,21 +26,33 @@ router.post('/assets', async (req, res) => {
   if (!Array.isArray(rows)) return res.status(400).json({ error: 'rows ir obligats masivs' });
 
   const result = chunkResult();
-  const categoriesRes = await pool.query('SELECT id, code, name_lv, name_en FROM asset_categories');
-  const categories = categoriesRes.rows;
-  const fallbackCategory = categories.find((c) => c.code === 'other');
+  const categoriesRes = await pool.query(
+    `SELECT c.id, c.code, c.name_lv, c.name_en, c.parent_id,
+            (SELECT code FROM categories root WHERE root.id = COALESCE(c.parent_id, c.id)) AS root_code
+     FROM categories c WHERE is_active = true`
+  );
+  // "Programmas" zars netiek izmantots iekārtu kategorizēšanai (tā ir
+  // programmatūra, nevis fiziska iekārta)
+  const categories = categoriesRes.rows.filter((c) => c.root_code !== 'programs');
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     try {
       if (!r.name || !String(r.name).trim()) throw new Error('trūkst "name"');
 
+      // Vispirms mēģina precīzi sakrist apakškategorijai (specifiskāk), tad
+      // pamatkategorijai; ja nekas nesakrīt, iekārta paliek bez kategorijas
+      // (admin var izlabot manuāli vēlāk rediģēšanas formā).
       let category = categories.find(
-        (c) => [c.code, c.name_lv, c.name_en].some(
-          (v) => v && r.categoryCode && v.toLowerCase() === String(r.categoryCode).toLowerCase()
-        )
+        (c) => c.parent_id && r.categoryCode && c.name_lv.toLowerCase() === String(r.categoryCode).toLowerCase()
       );
-      if (!category) category = fallbackCategory;
+      if (!category) {
+        category = categories.find(
+          (c) => !c.parent_id && r.categoryCode &&
+            [c.code, c.name_lv, c.name_en].some((v) => v && v.toLowerCase() === String(r.categoryCode).toLowerCase())
+        );
+      }
+      const categoryId = category ? category.id : null;
 
       const assetTag = r.assetTag && String(r.assetTag).trim()
         ? String(r.assetTag).trim()
@@ -63,7 +75,7 @@ router.post('/assets', async (req, res) => {
              location=$6, purchase_date=$7, purchase_price=$8, vendor=$9, warranty_until=$10,
              status=$11, notes=$12, qr_code=COALESCE(qr_code, $14), attributes=$15
            WHERE id = $13`,
-          [r.name, category.id, r.manufacturer || null, r.model || null, r.serialNumber || null,
+          [r.name, categoryId, r.manufacturer || null, r.model || null, r.serialNumber || null,
            r.location || null, r.purchaseDate || null, r.purchasePrice || null, r.vendor || null,
            r.warrantyUntil || null, status, r.notes || null, existing.rows[0].id, qrCode, JSON.stringify(mergedAttributes)]
         );
@@ -73,7 +85,7 @@ router.post('/assets', async (req, res) => {
           `INSERT INTO assets (asset_tag, category_id, name, manufacturer, model, serial_number,
              location, purchase_date, purchase_price, vendor, warranty_until, status, notes, qr_code, attributes)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-          [assetTag, category.id, r.name, r.manufacturer || null, r.model || null, r.serialNumber || null,
+          [assetTag, categoryId, r.name, r.manufacturer || null, r.model || null, r.serialNumber || null,
            r.location || null, r.purchaseDate || null, r.purchasePrice || null, r.vendor || null,
            r.warrantyUntil || null, status, r.notes || null, qrCode, JSON.stringify(sanitizedCustom)]
         );
