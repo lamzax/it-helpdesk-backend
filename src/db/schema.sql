@@ -46,15 +46,17 @@ CREATE INDEX idx_users_department ON users (department);
 
 CREATE TABLE categories (
     id              SMALLSERIAL PRIMARY KEY,
-    code            TEXT NOT NULL UNIQUE,
+    code            TEXT UNIQUE,
+    parent_id       SMALLINT REFERENCES categories(id) ON DELETE CASCADE,
     name_lv         TEXT NOT NULL,
     name_en         TEXT NOT NULL,
     default_priority TEXT NOT NULL DEFAULT 'medium'
                         CHECK (default_priority IN ('low','medium','high','critical')),
-    sort_order      INTEGER NOT NULL DEFAULT 0,   -- secība, kādā kategorija rādās ticketa formā
+    sort_order      INTEGER NOT NULL DEFAULT 0,
     is_active       BOOLEAN NOT NULL DEFAULT true
 );
 CREATE INDEX idx_categories_sort_order ON categories (sort_order);
+CREATE INDEX idx_categories_parent ON categories (parent_id);
 
 CREATE TABLE sla_policies (
     id              SERIAL PRIMARY KEY,
@@ -65,18 +67,6 @@ CREATE TABLE sla_policies (
     UNIQUE (category_id, priority)
 );
 
--- Apakškategorijas (piem. "Laptops" zem "Personīgās iekārtas")
-CREATE TABLE subcategories (
-    id              SMALLSERIAL PRIMARY KEY,
-    category_id     SMALLINT NOT NULL REFERENCES categories(id),
-    name_lv         TEXT NOT NULL,
-    name_en         TEXT NOT NULL,
-    sort_order      INTEGER NOT NULL DEFAULT 0,
-    is_active       BOOLEAN NOT NULL DEFAULT true,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (category_id, name_lv)
-);
-CREATE INDEX idx_subcategories_category ON subcategories (category_id, sort_order);
 
 -- ============================================================
 -- 3. IEKARTU (ASSET) PARVALDIBA
@@ -278,8 +268,8 @@ CREATE TABLE tickets (
     ticket_number   TEXT NOT NULL,
     title           TEXT NOT NULL,
     description     TEXT,
-    category_id     SMALLINT NOT NULL REFERENCES categories(id),
-    asset_id        UUID REFERENCES assets(id),      -- ja skenets QR vai izveleta iekarta
+    category_id     SMALLINT REFERENCES categories(id) ON DELETE SET NULL,
+    asset_id        UUID REFERENCES assets(id),
     reporter_id     UUID NOT NULL REFERENCES users(id),
     assignee_id     UUID REFERENCES users(id),
     status          TEXT NOT NULL DEFAULT 'new'
@@ -288,7 +278,6 @@ CREATE TABLE tickets (
                         CHECK (priority IN ('low','medium','high','critical')),
     source          TEXT NOT NULL DEFAULT 'mobile'
                         CHECK (source IN ('mobile','web','qr')),
-    subcategory_id  SMALLINT REFERENCES subcategories(id),
     application_id  UUID REFERENCES applications(id),
     custom_fields   JSONB NOT NULL DEFAULT '{}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -411,29 +400,29 @@ CREATE TRIGGER trg_close_prev_assignment
 -- 9. SEED DATI
 -- ============================================================
 
--- Kategorijas (divlīmeņu sistēma: kategorija + apakškategorija)
-INSERT INTO categories (code, name_lv, name_en, default_priority, sort_order) VALUES
-    ('personal_devices', 'Personīgās iekārtas', 'Personal devices', 'medium', 1),
-    ('printers',         'Printeri',            'Printers',         'medium', 2),
-    ('network_server',   'Tīkls/Serveris',      'Network/Server',   'high',   3),
-    ('programs',         'Programmas',          'Programs',         'medium', 4);
+-- Kategorijas (vienota pašatsaucoša tabula: parent_id = NULL nozīmē pamatkategoriju)
+INSERT INTO categories (code, name_lv, name_en, default_priority, sort_order, parent_id) VALUES
+    ('personal_devices', 'Personīgās iekārtas', 'Personal devices', 'medium', 1, NULL),
+    ('printers',         'Printeri',            'Printers',         'medium', 2, NULL),
+    ('network_server',   'Tīkls/Serveris',      'Network/Server',   'high',   3, NULL),
+    ('programs',         'Programmas',          'Programs',         'medium', 4, NULL);
 
-INSERT INTO subcategories (category_id, name_lv, name_en, sort_order)
-SELECT c.id, v.name_lv, v.name_en, v.ord FROM categories c,
+INSERT INTO categories (name_lv, name_en, sort_order, parent_id)
+SELECT v.name_lv, v.name_en, v.ord, c.id FROM categories c,
     (VALUES ('Laptops','Laptop',1),('Telefons','Phone',2),('Monitors','Monitor',3),
             ('Klaviatūra','Keyboard',4),('Pele','Mouse',5),('Planšete','Tablet',6)
     ) AS v(name_lv, name_en, ord)
 WHERE c.code = 'personal_devices';
 
-INSERT INTO subcategories (category_id, name_lv, name_en, sort_order)
-SELECT c.id, v.name_lv, v.name_en, v.ord FROM categories c,
+INSERT INTO categories (name_lv, name_en, sort_order, parent_id)
+SELECT v.name_lv, v.name_en, v.ord, c.id FROM categories c,
     (VALUES ('1.stāvs','1st floor',1),('2.stāvs','2nd floor',2),('3.stāvs','3rd floor',3),
             ('Serviss','Service',4),('Zebra','Zebra',5),('Brother','Brother',6)
     ) AS v(name_lv, name_en, ord)
 WHERE c.code = 'printers';
 
-INSERT INTO subcategories (category_id, name_lv, name_en, sort_order)
-SELECT c.id, v.name_lv, v.name_en, v.ord FROM categories c,
+INSERT INTO categories (name_lv, name_en, sort_order, parent_id)
+SELECT v.name_lv, v.name_en, v.ord, c.id FROM categories c,
     (VALUES ('WiFi tīkls','WiFi network',1),('Vada tīkls','Wired network',2),('Proxmox','Proxmox',3),
             ('Pritunl','Pritunl',4),('Terminal','Terminal',5),('APP','APP',6),('SQL','SQL',7),
             ('Unifi','Unifi',8),('Servertelpa-SW','Server room SW',9),('Ražošanas SW','Production SW',10),
@@ -441,17 +430,17 @@ SELECT c.id, v.name_lv, v.name_en, v.ord FROM categories c,
             ('Loģistikas meeting room','Logistics meeting room',14),('Meeting room','Meeting room',15)
     ) AS v(name_lv, name_en, ord)
 WHERE c.code = 'network_server';
--- "Programmas" kategorijai apakškategorijas nav statiskas -- tās nāk tieši
--- no "applications" tabulas (skat. INSERT INTO applications zemāk).
+-- "Programmas" apakškategorijas NAV šeit -- tās nāk dinamiski no
+-- "applications" tabulas (skat. INSERT INTO applications zemāk).
 
 INSERT INTO sla_policies (category_id, priority, response_minutes, resolve_minutes)
-SELECT id, 'critical', 15, 240 FROM categories
+SELECT id, 'critical', 15, 240 FROM categories WHERE parent_id IS NULL
 UNION ALL
-SELECT id, 'high', 30, 480 FROM categories
+SELECT id, 'high', 30, 480 FROM categories WHERE parent_id IS NULL
 UNION ALL
-SELECT id, 'medium', 120, 1440 FROM categories
+SELECT id, 'medium', 120, 1440 FROM categories WHERE parent_id IS NULL
 UNION ALL
-SELECT id, 'low', 480, 4320 FROM categories;
+SELECT id, 'low', 480, 4320 FROM categories WHERE parent_id IS NULL;
 
 INSERT INTO asset_categories (code, name_lv, name_en) VALUES
     ('phone',      'Telefons',         'Phone'),
