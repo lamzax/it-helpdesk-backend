@@ -72,7 +72,7 @@ async function boot() {
 function renderNav() {
   const tabs = [
     ['tickets', 'Ticketi'],
-    ['assets', 'Iekārtas'], ['applications', 'Aplikācijas'], ['phones', 'Tālruņu numuri'],
+    ['assets', 'Iekārtas'], ['applications', 'Programmas'], ['phones', 'Tālruņu numuri'],
     ['access', 'Piekļuves tiesības'], ['employees', 'Darbinieki'], ['categories', 'Kategorijas'],
     ['customFields', 'Pielāgotie lauki'],
   ];
@@ -151,7 +151,7 @@ async function loadTickets() {
   tbody.innerHTML = tickets.length ? tickets.map((t) => `
     <tr class="clickable" onclick="openTicketDetail('${t.id}')">
       <td>${esc(t.ticket_number)}</td>
-      <td>${esc(t.title)}</td>
+      <td>${esc(t.title)}${t.attachment_count > 0 ? ` <span class="muted">${t.has_image ? '🖼️' : ''}${t.has_video ? '🎥' : ''}${t.has_audio ? '🎙️' : ''}</span>` : ''}</td>
       <td>${esc(t.category_name)}</td>
       <td>${esc(t.subcategory_name) || esc(t.application_name) || '—'}</td>
       <td><span class="badge" style="background:${PRIORITY_COLORS[t.priority]}">${PRIORITY_LABELS_LV[t.priority]}</span></td>
@@ -282,7 +282,7 @@ function collectCustomFieldValues(table) {
 // PIELĀGOTO LAUKU DEFINĪCIJU CILNE (admin pārvalda pašus laukus)
 // ============================================================
 const CUSTOM_FIELD_TABLES = [
-  ['assets', 'Iekārtas'], ['tickets', 'Ticketi'], ['applications', 'Aplikācijas'], ['phone_numbers', 'Tālruņu numuri'],
+  ['assets', 'Iekārtas'], ['tickets', 'Ticketi'], ['applications', 'Programmas'], ['phone_numbers', 'Tālruņu numuri'],
 ];
 let customFieldsTabTable = 'assets';
 let customFieldsFullCache = [];
@@ -618,8 +618,34 @@ function printAssetLabels(assets) {
 // IEKĀRTAS (ASSETS)
 // ============================================================
 let assetsCache = [];
+let assetCategoryTreeCache = [];
+
+async function loadAssetCategoryTree() {
+  const { categories } = await api('/api/assets/categories/list');
+  assetCategoryTreeCache = categories; // plakans saraksts (root+bērni), IZŅEMOT "Programmas"
+  return categories;
+}
+
+// Renderē <select> ar <optgroup> pa pamatkategorijām -- "smuki", lai redz,
+// kas zem kā, izmantojot TIEŠI tās kategorijas, kas reģistrētas Kategoriju sadaļā.
+function renderAssetCategorySelect(selectedId, disabled) {
+  const roots = assetCategoryTreeCache.filter((c) => !c.parent_id);
+  const optgroups = roots.map((root) => {
+    const children = assetCategoryTreeCache.filter((c) => c.parent_id === root.id);
+    const rootOption = `<option value="${root.id}" ${String(selectedId) === String(root.id) ? 'selected' : ''}>(vispārīgi) ${esc(root.name_lv)}</option>`;
+    const childOptions = children.map((ch) =>
+      `<option value="${ch.id}" ${String(selectedId) === String(ch.id) ? 'selected' : ''}>— ${esc(ch.name_lv)}</option>`
+    ).join('');
+    return `<optgroup label="${esc(root.name_lv)}">${rootOption}${childOptions}</optgroup>`;
+  }).join('');
+  return `<select id="f_categoryId" ${disabled ? 'disabled' : ''}>
+    <option value="">— nav izvēlēts —</option>${optgroups}
+  </select>`;
+}
 
 async function renderAssetsTab() {
+  await loadAssetCategoryTree();
+  const roots = assetCategoryTreeCache.filter((c) => !c.parent_id);
   const main = document.getElementById('mainContent');
   main.innerHTML = `
     <div class="toolbar">
@@ -627,7 +653,13 @@ async function renderAssetsTab() {
         <input type="text" id="assetSearch" placeholder="Meklēt (nosaukums, Nr, sērijas Nr)..." oninput="loadAssets()" />
         <select id="assetCategoryFilter" onchange="loadAssets()">
           <option value="">Visas kategorijas</option>
-          ${state.categories.map((c) => `<option value="${c.code}">${esc(c.name_lv)}</option>`).join('')}
+          ${roots.map((root) => {
+            const children = assetCategoryTreeCache.filter((c) => c.parent_id === root.id);
+            return `<optgroup label="${esc(root.name_lv)}">
+              <option value="${root.id}">(vispārīgi) ${esc(root.name_lv)}</option>
+              ${children.map((ch) => `<option value="${ch.id}">— ${esc(ch.name_lv)}</option>`).join('')}
+            </optgroup>`;
+          }).join('')}
         </select>
         <select id="assetStatusFilter" onchange="loadAssets()">
           <option value="">Visi statusi</option>
@@ -658,8 +690,11 @@ async function loadAssets() {
   ]);
   assetsCache = assets;
 
+  // Saraksta kolonnas SASKAN ar pievienošanas/rediģēšanas formas laukiem.
   document.getElementById('assetsTableHead').innerHTML =
-    `<th>Inv. Nr</th><th>Nosaukums</th><th>Kategorija</th><th>Statuss</th><th>Turētājs</th><th>Atrašanās vieta</th>` +
+    `<th>Inv. Nr</th><th>Nosaukums</th><th>Kategorija</th><th>Ražotājs</th><th>Modelis</th>
+     <th>Sērijas Nr</th><th>Statuss</th><th>Turētājs</th><th>Atrašanās vieta</th>
+     <th>Piegādātājs</th><th>Iepirkuma datums</th><th>Garantija līdz</th><th>Piezīmes</th>` +
     customFieldDefs.map((f) => `<th>${esc(f.label)}</th>`).join('') +
     `<th></th>`;
 
@@ -668,22 +703,29 @@ async function loadAssets() {
     <tr class="clickable" onclick="openAssetDetail('${a.id}')">
       <td>${esc(a.asset_tag)}</td>
       <td>${esc(a.name)}</td>
-      <td>${esc(a.category_name)}</td>
+      <td>${esc(a.category_name) || '—'}</td>
+      <td>${esc(a.manufacturer) || '—'}</td>
+      <td>${esc(a.model) || '—'}</td>
+      <td>${esc(a.serial_number) || '—'}</td>
       <td><span class="badge" style="background:#888">${STATUS_LABELS_LV[a.status] || a.status}</span></td>
       <td>${esc(a.current_holder) || 'IT nodaļa'}</td>
       <td>${esc(a.location) || '—'}</td>
+      <td>${esc(a.vendor) || '—'}</td>
+      <td>${fmtDate(a.purchase_date)}</td>
+      <td>${fmtDate(a.warranty_until)}</td>
+      <td>${esc(a.notes) || '—'}</td>
       ${customFieldDefs.map((f) => {
         const val = (a.attributes || {})[f.field_key];
         const display = f.field_type === 'boolean' ? (val ? '✓' : '—') : (val ?? '—');
         return `<td>${esc(display)}</td>`;
       }).join('')}
       <td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); openAssetForm('${a.id}')">Rediģēt</button></td>
-    </tr>`).join('') : `<tr><td colspan="${7 + customFieldDefs.length}" class="empty">Nav rezultātu</td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="${14 + customFieldDefs.length}" class="empty">Nav rezultātu</td></tr>`;
 }
 
 async function openAssetForm(id) {
   const asset = id ? assetsCache.find((a) => a.id === id) : null;
-  await loadCustomFieldDefs('assets');
+  await Promise.all([loadCustomFieldDefs('assets'), loadAssetCategoryTree()]);
   // Iekārtu sarakstā "attributes" nav iekļauts (lai saraksta pieprasījums
   // paliktu ātrs) -- ja rediģē esošu iekārtu, paņemam pilnos datus atsevišķi.
   let existingAttributes = {};
@@ -694,14 +736,14 @@ async function openAssetForm(id) {
   openModal(`
     <h2>${asset ? 'Rediģēt iekārtu' : 'Jauna iekārta'}</h2>
     <label>Inventāra Nr *</label><input id="f_assetTag" value="${asset ? esc(asset.asset_tag) : ''}" ${asset ? 'disabled' : ''} />
-    <label>Kategorija *</label>
-    <select id="f_categoryCode" ${asset ? 'disabled' : ''}>
-      ${state.categories.map((c) => `<option value="${c.code}" ${asset && asset.category_code === c.code ? 'selected' : ''}>${esc(c.name_lv)}</option>`).join('')}
-    </select>
+    <label>Kategorija</label>
+    ${renderAssetCategorySelect(asset ? asset.category_id : null, false)}
     <label>Nosaukums *</label><input id="f_name" value="${asset ? esc(asset.name) : ''}" />
     <label>Ražotājs</label><input id="f_manufacturer" value="${asset ? esc(asset.manufacturer) : ''}" />
     <label>Modelis</label><input id="f_model" value="${asset ? esc(asset.model) : ''}" />
     <label>Sērijas numurs</label><input id="f_serialNumber" value="${asset ? esc(asset.serial_number) : ''}" />
+    <label>Turētājs</label>
+    <p class="muted" style="margin:2px 0">Turētāju maina ar pogu "Piešķirt"/"Atgriezt" iekārtas kartītē (skatīt vēsturi).</p>
     <label>Atrašanās vieta</label><input id="f_location" value="${asset ? esc(asset.location) : ''}" />
     <label>Piegādātājs</label><input id="f_vendor" value="${asset ? esc(asset.vendor) : ''}" />
     <label>Iepirkuma datums</label><input type="date" id="f_purchaseDate" value="${asset && asset.purchase_date ? asset.purchase_date.slice(0, 10) : ''}" />
@@ -718,6 +760,7 @@ async function openAssetForm(id) {
 async function saveAsset(id) {
   const payload = {
     name: document.getElementById('f_name').value,
+    categoryId: document.getElementById('f_categoryId').value || null,
     manufacturer: document.getElementById('f_manufacturer').value,
     model: document.getElementById('f_model').value,
     serialNumber: document.getElementById('f_serialNumber').value,
@@ -734,7 +777,6 @@ async function saveAsset(id) {
       await api('/api/assets/' + id, { method: 'PATCH', body: payload });
     } else {
       payload.assetTag = document.getElementById('f_assetTag').value;
-      payload.categoryCode = document.getElementById('f_categoryCode').value;
       if (!payload.assetTag || !payload.name) { alert('Inventāra Nr un nosaukums ir obligāti'); return; }
       await api('/api/assets', { method: 'POST', body: payload });
     }
@@ -742,12 +784,19 @@ async function saveAsset(id) {
   } catch (e) { alert(e.message); }
 }
 
+const LIFECYCLE_EVENT_LABELS_LV = {
+  purchased: 'Reģistrēts', deployed: 'Piešķirts', returned: 'Atgriezts',
+  repair_started: 'Nodots remontā', repair_finished: 'Remonts pabeigts',
+  transferred: 'Pārvietots', status_changed: 'Statuss mainīts',
+  retired: 'Izņemts', disposed: 'Utilizēts', note: 'Piezīme',
+};
+
 async function openAssetDetail(id) {
   const { asset, assignments, lifecycle, tickets } = await api('/api/assets/' + id);
   const { users } = await api('/api/users');
   openModal(`
     <h2>${esc(asset.name)}</h2>
-    <p class="muted">${esc(asset.asset_tag)} · ${esc(asset.category_name)} · ${STATUS_LABELS_LV[asset.status]}</p>
+    <p class="muted">${esc(asset.asset_tag)} · ${esc(asset.category_name) || 'Bez kategorijas'} · ${STATUS_LABELS_LV[asset.status]}</p>
 
     <div class="section-title">Piešķiršana</div>
     <p class="muted" style="margin:4px 0">Ja iekārta nav piešķirta nevienam darbiniekam, tā skaitās kā IT nodaļas rīcībā esoša iekārta.</p>
@@ -757,11 +806,17 @@ async function openAssetDetail(id) {
       <button class="btn btn-sm btn-outline" onclick="unassignAsset('${id}')">Atgriezt</button>
     </div>
 
-    <div class="section-title">Piešķīrumu vēsture</div>
-    ${assignments.length ? assignments.map((a) => `<div class="history-item">${esc(a.user_name)} — ${fmtDateTime(a.assigned_at)} ${a.unassigned_at ? '→ ' + fmtDateTime(a.unassigned_at) : '<b>(pašlaik)</b>'}</div>`).join('') : '<p class="muted">Nav ierakstu</p>'}
+    <div class="section-title">Piešķīrumu vēsture (turētājs)</div>
+    ${assignments.length ? assignments.map((a) => `<div class="history-item">
+        <b>${esc(a.user_name)}</b> — ${fmtDateTime(a.assigned_at)} ${a.unassigned_at ? '→ ' + fmtDateTime(a.unassigned_at) : '<b>(pašlaik)</b>'}
+        ${a.assigned_by_name ? `<br><span class="muted">Piešķīra: ${esc(a.assigned_by_name)}</span>` : ''}
+      </div>`).join('') : '<p class="muted">Nav ierakstu</p>'}
 
-    <div class="section-title">Dzīves cikla vēsture</div>
-    ${lifecycle.length ? lifecycle.map((l) => `<div class="history-item">${fmtDateTime(l.event_at)} — ${esc(l.event_type)}: ${esc(l.description)}</div>`).join('') : '<p class="muted">Nav ierakstu</p>'}
+    <div class="section-title">Dzīves cikla un atrašanās vietas vēsture</div>
+    ${lifecycle.length ? lifecycle.map((l) => `<div class="history-item">
+        ${fmtDateTime(l.event_at)} — <b>${esc(LIFECYCLE_EVENT_LABELS_LV[l.event_type] || l.event_type)}</b>: ${esc(l.description)}
+        ${l.performed_by_name ? `<br><span class="muted">Veica: ${esc(l.performed_by_name)}</span>` : ''}
+      </div>`).join('') : '<p class="muted">Nav ierakstu</p>'}
 
     <div class="section-title">Saistītie ticketi</div>
     ${tickets.length ? tickets.map((t) => `<div class="history-item">${esc(t.ticket_number)} — ${esc(t.title)} <span class="badge" style="background:#888">${TICKET_STATUS_LV[t.status]}</span></div>`).join('') : '<p class="muted">Nav ticketu</p>'}
@@ -798,10 +853,10 @@ async function renderApplicationsTab() {
   const main = document.getElementById('mainContent');
   main.innerHTML = `
     <div class="toolbar">
-      <input type="text" id="appSearch" placeholder="Meklēt aplikāciju..." oninput="loadApplications()" />
+      <input type="text" id="appSearch" placeholder="Meklēt programmu..." oninput="loadApplications()" />
       <div>
         <button class="btn btn-outline" onclick="openImportModal('applications')">⬆ Importēt no CSV</button>
-        <button class="btn btn-green" onclick="openAppForm()">+ Pievienot aplikāciju</button>
+        <button class="btn btn-green" onclick="openAppForm()">+ Pievienot programmu</button>
       </div>
     </div>
     <table id="appsTable"><thead><tr id="appsTableHead"></tr></thead><tbody></tbody></table>`;
@@ -817,14 +872,14 @@ async function loadApplications() {
   appsCache = applications;
 
   document.getElementById('appsTableHead').innerHTML =
-    `<th>Nosaukums</th><th>Ražotājs</th><th>Kategorija</th><th>Aktīvie lietotāji</th><th>Licences (vietas)</th>` +
+    `<th>Nosaukums</th><th>Ražotājs</th><th>Aktīvie lietotāji</th><th>Licences (vietas)</th>` +
     customFieldDefs.map((f) => `<th>${esc(f.label)}</th>`).join('') +
     `<th></th>`;
 
   const tbody = document.querySelector('#appsTable tbody');
   tbody.innerHTML = applications.length ? applications.map((a) => `
     <tr class="clickable" onclick="openAppDetail('${a.id}')">
-      <td>${esc(a.name)}</td><td>${esc(a.vendor) || '—'}</td><td>${esc(a.category) || '—'}</td>
+      <td>${esc(a.name)}</td><td>${esc(a.vendor) || '—'}</td>
       <td>${a.active_assignments}</td><td>${a.seats_total}</td>
       ${customFieldDefs.map((f) => {
         const val = (a.custom_fields || {})[f.field_key];
@@ -832,17 +887,17 @@ async function loadApplications() {
         return `<td>${esc(display)}</td>`;
       }).join('')}
       <td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); openAppForm('${a.id}')">Rediģēt</button></td>
-    </tr>`).join('') : `<tr><td colspan="${6 + customFieldDefs.length}" class="empty">Nav rezultātu</td></tr>`;
+    </tr>`).join('') : `<tr><td colspan="${5 + customFieldDefs.length}" class="empty">Nav rezultātu</td></tr>`;
 }
 
 async function openAppForm(id) {
   const app = id ? appsCache.find((a) => a.id === id) : null;
   await loadCustomFieldDefs('applications');
   openModal(`
-    <h2>${app ? 'Rediģēt aplikāciju' : 'Jauna aplikācija'}</h2>
+    <h2>${app ? 'Rediģēt programmu' : 'Jauna programma'}</h2>
     <label>Nosaukums *</label><input id="f_appName" value="${app ? esc(app.name) : ''}" />
     <label>Ražotājs</label><input id="f_appVendor" value="${app ? esc(app.vendor) : ''}" />
-    <label>Kategorija</label><input id="f_appCategory" value="${app ? esc(app.category) : ''}" placeholder="piem. productivity, security" />
+    <p class="muted">Kategorija: Programma (Pamatkategorija) -- automātiski redzama arī Kategoriju sadaļā.</p>
     <label>Apraksts</label><textarea id="f_appDescription" rows="2">${app ? esc(app.description) : ''}</textarea>
     ${renderCustomFieldsHTML('applications', app?.custom_fields || {})}
     <div class="modal-actions">
@@ -856,7 +911,6 @@ async function saveApp(id) {
   const payload = {
     name: document.getElementById('f_appName').value,
     vendor: document.getElementById('f_appVendor').value,
-    category: document.getElementById('f_appCategory').value,
     description: document.getElementById('f_appDescription').value,
     customFields: collectCustomFieldValues('applications'),
   };
@@ -869,7 +923,7 @@ async function saveApp(id) {
 }
 
 async function deleteApp(id) {
-  if (!confirm('Dzēst šo aplikāciju?')) return;
+  if (!confirm('Dzēst šo programmu?')) return;
   try { await api('/api/applications/' + id, { method: 'DELETE' }); closeModal(); loadApplications(); }
   catch (e) { alert(e.message); }
 }
@@ -1110,7 +1164,7 @@ async function openEmployeeProfile(id) {
     <div class="section-title">Piešķirtās iekārtas</div>
     ${assets.length ? assets.map((a) => `<div class="history-item">${esc(a.name)} (${esc(a.category_name)}) — kopš ${fmtDate(a.assigned_at)}</div>`).join('') : '<p class="muted">Nav</p>'}
 
-    <div class="section-title">Aplikācijas</div>
+    <div class="section-title">Programmas</div>
     ${applications.length ? applications.map((a) => `<div class="history-item">${esc(a.name)} — kopš ${fmtDate(a.assigned_at)}</div>`).join('') : '<p class="muted">Nav</p>'}
 
     <div class="section-title">Tālruņa numuri</div>
