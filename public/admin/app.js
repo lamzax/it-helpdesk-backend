@@ -406,170 +406,170 @@ async function saveCustomField(id) {
 }
 
 // ============================================================
-// KATEGORIJAS (ar secību, kādā rādās ticketa formā)
+// KATEGORIJAS -- vienots skats: pamatkategorijas UN apakškategorijas
+// vienā sarakstā, ar meklēšanu, pievienošanu (izvēloties tipu) un
+// REĀLU dzēšanu (nevis tikai paslēpšanu).
 // ============================================================
-let categoriesFullCache = [];
+let categoryTreeCache = [];
 
 async function renderCategoriesTab() {
   const main = document.getElementById('mainContent');
   main.innerHTML = `
     <div class="toolbar">
-      <p class="muted" style="margin:0">Secība šeit nosaka, kādā kārtībā kategorijas parādās, aizpildot ticketu mobilajā aplikācijā.</p>
+      <input type="text" id="categorySearch" placeholder="Meklēt kategoriju vai apakškategoriju..." oninput="loadCategoryTree()" />
       <button class="btn btn-green" onclick="openCategoryForm()">+ Pievienot kategoriju</button>
     </div>
-    <table id="categoriesTable"><thead><tr><th>#</th><th>Nosaukums (LV)</th><th>Nosaukums (EN)</th><th>Noklusētā prioritāte</th><th>Statuss</th><th>Apakškategorijas</th><th></th></tr></thead><tbody></tbody></table>`;
-  await loadCategories();
+    <table id="categoriesTable"><thead><tr><th></th><th>Nosaukums</th><th>Tips</th><th></th></tr></thead><tbody></tbody></table>`;
+  await loadCategoryTree();
 }
 
-async function loadCategories() {
-  const { categories } = await api('/api/categories/all');
-  categoriesFullCache = categories;
+async function loadCategoryTree() {
+  const search = document.getElementById('categorySearch')?.value.trim() || '';
+  const { categories } = await api('/api/categories/all' + (search ? '?search=' + encodeURIComponent(search) : ''));
+  categoryTreeCache = categories; // plakans saraksts: { id, name_lv, name_en, parent_id, parent_name, sort_order }
+  renderCategoryRows();
+}
+
+function renderCategoryRows() {
   const tbody = document.querySelector('#categoriesTable tbody');
-  tbody.innerHTML = categories.map((c, idx) => `
-    <tr>
-      <td>
-        <button class="btn btn-sm btn-outline" ${idx === 0 ? 'disabled' : ''} onclick="moveCategory(${c.id}, -1)">↑</button>
-        <button class="btn btn-sm btn-outline" ${idx === categories.length - 1 ? 'disabled' : ''} onclick="moveCategory(${c.id}, 1)">↓</button>
-      </td>
-      <td>${esc(c.name_lv)}</td>
-      <td>${esc(c.name_en)}</td>
-      <td>${PRIORITY_LABELS_LV[c.default_priority]}</td>
-      <td>${c.is_active ? '<span class="badge" style="background:var(--green)">aktīva</span>' : '<span class="badge" style="background:#999">paslēpta</span>'}</td>
-      <td>
-        ${c.code === 'programs'
-          ? `<span class="muted">Nāk no "Aplikācijas" sadaļas</span>`
-          : `<button class="btn btn-sm btn-outline" onclick="openSubcategoriesModal(${c.id}, '${esc(c.name_lv)}')">Pārvaldīt</button>`}
-      </td>
-      <td><button class="btn btn-sm btn-outline" onclick="openCategoryForm(${c.id})">Rediģēt</button></td>
-    </tr>`).join('');
-}
+  const search = document.getElementById('categorySearch')?.value.trim() || '';
 
-// ---------- Apakškategoriju pārvaldība (katrai kategorijai atsevišķi) ----------
-let subcategoriesModalCategoryId = null;
-let subcategoriesFullCache = [];
+  if (search) {
+    // Meklēšanas režīmā serveris atgriež TIKAI atbilstošās rindas (var būt
+    // apakškategorija bez tās pamatkategorijas klāt) -- tāpēc rādām plakanu
+    // sarakstu, katrai apakškategorijai parādot pamatkategorijas nosaukumu.
+    const rows = categoryTreeCache.map((c) => `
+      <tr>
+        <td></td>
+        <td>${c.parent_id ? `<span class="muted">${esc(c.parent_name || '')} ›</span> ` : ''}${esc(c.name_lv)}</td>
+        <td>${c.parent_id ? 'Apakškategorija' : 'Pamatkategorija'}</td>
+        <td>
+          <button class="btn btn-sm btn-outline" onclick="openCategoryForm(${c.id})">Rediģēt</button>
+          <button class="btn btn-sm btn-red" onclick="deleteCategory(${c.id}, ${!c.parent_id})">Dzēst</button>
+        </td>
+      </tr>`).join('');
+    tbody.innerHTML = rows || `<tr><td colspan="4" class="empty">Nav rezultātu</td></tr>`;
+    return;
+  }
 
-async function openSubcategoriesModal(categoryId, categoryName) {
-  subcategoriesModalCategoryId = categoryId;
-  openModal(`
-    <h2>Apakškategorijas — ${esc(categoryName)}</h2>
-    <div id="subcategoriesList"></div>
-    <div class="modal-actions" style="justify-content: space-between; margin-top: 16px;">
-      <button class="btn btn-green" onclick="openSubcategoryForm()">+ Pievienot apakškategoriju</button>
-      <button class="btn btn-outline" onclick="closeModal()">Aizvērt</button>
-    </div>`);
-  await loadSubcategoriesList();
-}
+  const roots = categoryTreeCache.filter((c) => !c.parent_id);
+  const rows = [];
 
-async function loadSubcategoriesList() {
-  const { subcategories } = await api('/api/subcategories/all?categoryId=' + subcategoriesModalCategoryId);
-  subcategoriesFullCache = subcategories;
-  const listEl = document.getElementById('subcategoriesList');
-  if (!listEl) return;
-  listEl.innerHTML = subcategories.length ? subcategories.map((s, idx) => `
-    <div class="history-item" style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
-      <div>
-        <button class="btn btn-sm btn-outline" ${idx === 0 ? 'disabled' : ''} onclick="moveSubcategory(${s.id}, -1)">↑</button>
-        <button class="btn btn-sm btn-outline" ${idx === subcategories.length - 1 ? 'disabled' : ''} onclick="moveSubcategory(${s.id}, 1)">↓</button>
-        ${esc(s.name_lv)}
-        ${s.is_active ? '' : '<span class="badge" style="background:#999">paslēpta</span>'}
-      </div>
-      <button class="btn btn-sm btn-outline" onclick="openSubcategoryForm(${s.id})">Rediģēt</button>
-    </div>`).join('') : '<p class="muted">Vēl nav apakškategoriju</p>';
-}
+  roots.forEach((cat, catIdx) => {
+    const children = categoryTreeCache.filter((c) => c.parent_id === cat.id);
+    rows.push(`
+      <tr>
+        <td>
+          <button class="btn btn-sm btn-outline" ${catIdx === 0 ? 'disabled' : ''} onclick="moveCategory(${cat.id}, -1)">↑</button>
+          <button class="btn btn-sm btn-outline" ${catIdx === roots.length - 1 ? 'disabled' : ''} onclick="moveCategory(${cat.id}, 1)">↓</button>
+        </td>
+        <td><b>${esc(cat.name_lv)}</b></td>
+        <td>Pamatkategorija</td>
+        <td>
+          <button class="btn btn-sm btn-outline" onclick="openCategoryForm(${cat.id})">Rediģēt</button>
+          <button class="btn btn-sm btn-red" onclick="deleteCategory(${cat.id}, true)">Dzēst</button>
+        </td>
+      </tr>`);
 
-async function moveSubcategory(id, direction) {
-  const idx = subcategoriesFullCache.findIndex((s) => s.id === id);
-  const swapIdx = idx + direction;
-  if (swapIdx < 0 || swapIdx >= subcategoriesFullCache.length) return;
-  const reordered = [...subcategoriesFullCache];
-  [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
-  try {
-    await api('/api/subcategories/reorder', {
-      method: 'POST',
-      body: { categoryId: subcategoriesModalCategoryId, orderedIds: reordered.map((s) => s.id) },
+    children.forEach((sub, subIdx) => {
+      rows.push(`
+        <tr>
+          <td>
+            <button class="btn btn-sm btn-outline" ${subIdx === 0 ? 'disabled' : ''} onclick="moveSubcategory(${cat.id}, ${sub.id}, -1)">↑</button>
+            <button class="btn btn-sm btn-outline" ${subIdx === children.length - 1 ? 'disabled' : ''} onclick="moveSubcategory(${cat.id}, ${sub.id}, 1)">↓</button>
+          </td>
+          <td style="padding-left: 28px">↳ ${esc(sub.name_lv)}</td>
+          <td>Apakškategorija</td>
+          <td>
+            <button class="btn btn-sm btn-outline" onclick="openCategoryForm(${sub.id})">Rediģēt</button>
+            <button class="btn btn-sm btn-red" onclick="deleteCategory(${sub.id}, false)">Dzēst</button>
+          </td>
+        </tr>`);
     });
-    loadSubcategoriesList();
-  } catch (e) { alert(e.message); }
-}
+  });
 
-function openSubcategoryForm(id) {
-  const sub = id ? subcategoriesFullCache.find((s) => s.id === id) : null;
-  openModal(`
-    <h2>${sub ? 'Rediģēt apakškategoriju' : 'Jauna apakškategorija'}</h2>
-    <label>Nosaukums latviski *</label><input id="f_subNameLv" value="${sub ? esc(sub.name_lv) : ''}" />
-    <label>Nosaukums angliski *</label><input id="f_subNameEn" value="${sub ? esc(sub.name_en) : ''}" />
-    ${sub ? `<label>Statuss</label><select id="f_subActive"><option value="true" ${sub.is_active ? 'selected' : ''}>Aktīva</option><option value="false" ${!sub.is_active ? 'selected' : ''}>Paslēpta</option></select>` : ''}
-    <div class="modal-actions">
-      <button class="btn btn-outline" onclick="openSubcategoriesModal(subcategoriesModalCategoryId, '')">Atcelt</button>
-      <button class="btn btn-primary" onclick="saveSubcategory(${sub ? sub.id : 'null'})">Saglabāt</button>
-    </div>`);
-}
-
-async function saveSubcategory(id) {
-  const nameLv = document.getElementById('f_subNameLv').value.trim();
-  const nameEn = document.getElementById('f_subNameEn').value.trim();
-  if (!nameLv || !nameEn) { alert('Abi nosaukumi ir obligāti'); return; }
-  try {
-    if (id) {
-      const isActive = document.getElementById('f_subActive').value === 'true';
-      await api('/api/subcategories/' + id, { method: 'PATCH', body: { nameLv, nameEn, isActive } });
-    } else {
-      await api('/api/subcategories', { method: 'POST', body: { categoryId: subcategoriesModalCategoryId, nameLv, nameEn } });
-    }
-    const catName = categoriesFullCache.find((c) => c.id === subcategoriesModalCategoryId)?.name_lv || '';
-    await openSubcategoriesModal(subcategoriesModalCategoryId, catName);
-  } catch (e) { alert(e.message); }
+  tbody.innerHTML = rows.length ? rows.join('') : `<tr><td colspan="4" class="empty">Nav rezultātu</td></tr>`;
 }
 
 async function moveCategory(id, direction) {
-  const idx = categoriesFullCache.findIndex((c) => c.id === id);
+  const roots = categoryTreeCache.filter((c) => !c.parent_id);
+  const idx = roots.findIndex((c) => c.id === id);
   const swapIdx = idx + direction;
-  if (swapIdx < 0 || swapIdx >= categoriesFullCache.length) return;
-  const reordered = [...categoriesFullCache];
+  if (swapIdx < 0 || swapIdx >= roots.length) return;
+  const reordered = [...roots];
   [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
   try {
     await api('/api/categories/reorder', { method: 'POST', body: { orderedIds: reordered.map((c) => c.id) } });
-    loadCategories();
+    loadCategoryTree();
   } catch (e) { alert(e.message); }
 }
 
-function openCategoryForm(id) {
-  const cat = id ? categoriesFullCache.find((c) => c.id === id) : null;
+async function moveSubcategory(parentId, subId, direction) {
+  const children = categoryTreeCache.filter((c) => c.parent_id === parentId);
+  const idx = children.findIndex((s) => s.id === subId);
+  const swapIdx = idx + direction;
+  if (swapIdx < 0 || swapIdx >= children.length) return;
+  const reordered = [...children];
+  [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
+  try {
+    await api('/api/categories/reorder-children', { method: 'POST', body: { parentId, orderedIds: reordered.map((s) => s.id) } });
+    loadCategoryTree();
+  } catch (e) { alert(e.message); }
+}
+
+// "Pievienot kategoriju" -- viena forma abiem gadījumiem: lietotājs vispirms
+// izvēlas, vai tā ir pamatkategorija vai apakškategorija (un, ja apakš --
+// kurai pamatkategorijai tā pieder).
+function openCategoryForm(editCategoryId) {
+  const editing = editCategoryId ? categoryTreeCache.find((c) => c.id === editCategoryId) : null;
+  const roots = categoryTreeCache.filter((c) => !c.parent_id);
   openModal(`
-    <h2>${cat ? 'Rediģēt kategoriju' : 'Jauna kategorija'}</h2>
-    ${!cat ? `<label>Kods (unikāls, bez atstarpēm) *</label><input id="f_catCode" placeholder="piem. printers" />` : ''}
-    <label>Nosaukums latviski *</label><input id="f_catNameLv" value="${cat ? esc(cat.name_lv) : ''}" />
-    <label>Nosaukums angliski *</label><input id="f_catNameEn" value="${cat ? esc(cat.name_en) : ''}" />
-    <label>Noklusētā prioritāte</label>
-    <select id="f_catPriority">
-      ${Object.entries(PRIORITY_LABELS_LV).map(([k, v]) => `<option value="${k}" ${cat && cat.default_priority === k ? 'selected' : ''}>${v}</option>`).join('')}
-    </select>
-    ${cat ? `<label>Statuss</label><select id="f_catActive"><option value="true" ${cat.is_active ? 'selected' : ''}>Aktīva (redzama formā)</option><option value="false" ${!cat.is_active ? 'selected' : ''}>Paslēpta</option></select>` : ''}
+    <h2>${editing ? 'Rediģēt kategoriju' : 'Jauna kategorija'}</h2>
+    ${!editing ? `
+      <label>Tips *</label>
+      <select id="f_catType" onchange="document.getElementById('parentCatRow').style.display = this.value === 'sub' ? 'block' : 'none'">
+        <option value="main">Pamatkategorija</option>
+        <option value="sub">Apakškategorija</option>
+      </select>
+      <div id="parentCatRow" style="display:none">
+        <label>Pieder pie pamatkategorijas *</label>
+        <select id="f_catParent">
+          ${roots.map((c) => `<option value="${c.id}">${esc(c.name_lv)}</option>`).join('')}
+        </select>
+      </div>
+    ` : `<p class="muted">${editing.parent_id ? 'Apakškategorija (' + esc(editing.parent_name) + ')' : 'Pamatkategorija'}</p>`}
+    <label>Nosaukums *</label>
+    <input id="f_catName" value="${editing ? esc(editing.name_lv) : ''}" placeholder="piem. Skeneri" />
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closeModal()">Atcelt</button>
-      <button class="btn btn-primary" onclick="saveCategory(${cat ? cat.id : 'null'})">Saglabāt</button>
+      <button class="btn btn-primary" onclick="saveCategoryForm(${editCategoryId || 'null'})">Saglabāt</button>
     </div>`);
 }
 
-async function saveCategory(id) {
-  const payload = {
-    nameLv: document.getElementById('f_catNameLv').value,
-    nameEn: document.getElementById('f_catNameEn').value,
-    defaultPriority: document.getElementById('f_catPriority').value,
-  };
-  if (!payload.nameLv || !payload.nameEn) { alert('Abi nosaukumi ir obligāti'); return; }
+async function saveCategoryForm(editCategoryId) {
+  const nameLv = document.getElementById('f_catName').value.trim();
+  if (!nameLv) { alert('Nosaukums ir obligāts'); return; }
   try {
-    if (id) {
-      payload.isActive = document.getElementById('f_catActive').value === 'true';
-      await api('/api/categories/' + id, { method: 'PATCH', body: payload });
+    if (editCategoryId) {
+      await api('/api/categories/' + editCategoryId, { method: 'PATCH', body: { nameLv } });
     } else {
-      payload.code = document.getElementById('f_catCode').value.trim();
-      if (!payload.code) { alert('Kods ir obligāts'); return; }
-      await api('/api/categories', { method: 'POST', body: payload });
+      const type = document.getElementById('f_catType').value;
+      const parentId = type === 'sub' ? document.getElementById('f_catParent').value : undefined;
+      await api('/api/categories', { method: 'POST', body: { nameLv, parentId } });
     }
-    closeModal(); loadCategories();
-    const catRes = await api('/api/assets/categories/list');
-    state.categories = catRes.categories;
+    closeModal();
+    await loadCategoryTree();
+  } catch (e) { alert(e.message); }
+}
+
+async function deleteCategory(id, isRoot) {
+  const msg = isRoot
+    ? 'Tiešām dzēst šo PAMATKATEGORIJU? Tiks dzēstas arī VISAS tās apakškategorijas. Vecajiem ticketiem kategorija kļūs tukša.'
+    : 'Tiešām dzēst šo apakškategoriju? Vecajiem ticketiem tā kļūs tukša.';
+  if (!confirm(msg)) return;
+  try {
+    await api('/api/categories/' + id, { method: 'DELETE' });
+    await loadCategoryTree();
   } catch (e) { alert(e.message); }
 }
 
