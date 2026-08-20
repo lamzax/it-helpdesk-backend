@@ -18,12 +18,13 @@ async function generateTicketNumber(client) {
 }
 
 // GET /api/tickets?status=new&category=personal_devices&mine=true&page=1&pageSize=20
+// "category" filtrē pēc PAMATKATEGORIJAS koda (atbilst tiklab, ja ticketam
+// tieši šī kategorija, kā arī ja tā ir kāda no šīs pamatkategorijas apakškategorijām).
 router.get('/', async (req, res) => {
   const { status, category, mine, page = 1, pageSize = 20 } = req.query;
   const conditions = [];
   const params = [];
 
-  // Requester loma redz tikai savus ticketus; agent/admin redz visus (var filtret ar mine=true)
   if (req.user.role === 'requester' || mine === 'true') {
     params.push(req.user.id);
     conditions.push(`t.reporter_id = $${params.length}`);
@@ -34,7 +35,7 @@ router.get('/', async (req, res) => {
   }
   if (category) {
     params.push(category);
-    conditions.push(`c.code = $${params.length}`);
+    conditions.push(`(c.code = $${params.length} OR parent_c.code = $${params.length})`);
   }
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -46,16 +47,17 @@ router.get('/', async (req, res) => {
     const query = `
       SELECT t.id, t.ticket_number, t.title, t.description, t.status, t.priority, t.source,
              t.created_at, t.updated_at,
-             c.code AS category_code, c.name_lv AS category_name,
-             sc.name_lv AS subcategory_name,
+             COALESCE(parent_c.code, c.code) AS category_code,
+             COALESCE(parent_c.name_lv, c.name_lv) AS category_name,
+             CASE WHEN c.parent_id IS NOT NULL THEN c.name_lv ELSE NULL END AS subcategory_name,
              app.name AS application_name,
              d.name AS device_name, d.qr_code AS device_qr_code,
              ru.display_name AS reporter_name,
              au.display_name AS assignee_name,
              (SELECT COUNT(*)::int FROM ticket_attachments ta WHERE ta.ticket_id = t.id) AS attachment_count
       FROM tickets t
-      JOIN categories c ON c.id = t.category_id
-      LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
+      LEFT JOIN categories c ON c.id = t.category_id
+      LEFT JOIN categories parent_c ON parent_c.id = c.parent_id
       LEFT JOIN applications app ON app.id = t.application_id
       LEFT JOIN assets d ON d.id = t.asset_id
       JOIN users ru ON ru.id = t.reporter_id
@@ -75,15 +77,17 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const ticketRes = await pool.query(
-      `SELECT t.*, c.code AS category_code, c.name_lv AS category_name,
-              sc.name_lv AS subcategory_name,
+      `SELECT t.*,
+              COALESCE(parent_c.code, c.code) AS category_code,
+              COALESCE(parent_c.name_lv, c.name_lv) AS category_name,
+              CASE WHEN c.parent_id IS NOT NULL THEN c.name_lv ELSE NULL END AS subcategory_name,
               app.name AS application_name,
               d.name AS device_name, d.qr_code AS device_qr_code, d.location AS device_location,
               ru.display_name AS reporter_name, ru.email AS reporter_email,
               au.display_name AS assignee_name
        FROM tickets t
-       JOIN categories c ON c.id = t.category_id
-       LEFT JOIN subcategories sc ON sc.id = t.subcategory_id
+       LEFT JOIN categories c ON c.id = t.category_id
+       LEFT JOIN categories parent_c ON parent_c.id = c.parent_id
        LEFT JOIN applications app ON app.id = t.application_id
        LEFT JOIN assets d ON d.id = t.asset_id
        JOIN users ru ON ru.id = t.reporter_id
@@ -119,15 +123,17 @@ router.get('/:id', async (req, res) => {
 });
 
 // POST /api/tickets -- jauna ticketa registresana no mobilas aplikacijas
-// body: { title, description, categoryCode, subcategoryId?, applicationId?,
-//         qrCode?, assetId?, priority?, attachmentUrls?: [], customFields? }
+// body: { title, description, categoryId, applicationId?, qrCode?, assetId?,
+//         priority?, attachmentUrls?: [], customFields? }
+// "categoryId" ir TIEŠI izvēlētā kategorija (var but pamatkategorija VAI
+// apakškategorija -- abas ir "categories" tabulā).
 router.post('/', async (req, res) => {
   const {
-    title, description, categoryCode, subcategoryId, applicationId,
+    title, description, categoryId, applicationId,
     qrCode, assetId: assetIdInput, priority, attachmentUrls = [], customFields,
   } = req.body;
-  if (!title || !categoryCode) {
-    return res.status(400).json({ error: 'title un categoryCode ir obligati' });
+  if (!title || !categoryId) {
+    return res.status(400).json({ error: 'title un categoryId ir obligati' });
   }
   const sanitizedCustom = await sanitizeCustomFields('tickets', customFields);
 
@@ -135,13 +141,10 @@ router.post('/', async (req, res) => {
   try {
     await client.query('BEGIN');
 
-    const categoryRes = await client.query('SELECT * FROM categories WHERE code = $1', [categoryCode]);
-    if (categoryRes.rows.length === 0) throw new Error('Nezinama kategorija: ' + categoryCode);
+    const categoryRes = await client.query('SELECT * FROM categories WHERE id = $1', [categoryId]);
+    if (categoryRes.rows.length === 0) throw new Error('Nezinama kategorija');
     const category = categoryRes.rows[0];
 
-    // Iekārtu ticketam var piesaistīt DIVOS veidos: ja zināms tiešais assetId
-    // (piem. lietotājs izvēlējās iekārtu no "Manas piesaistes" saraksta),
-    // vai caur qrCode (skenējot uzlīmi) -- tiešais assetId ir prioritārs.
     let assetId = null;
     if (assetIdInput) {
       const checkRes = await client.query('SELECT id FROM assets WHERE id = $1', [assetIdInput]);
@@ -149,17 +152,8 @@ router.post('/', async (req, res) => {
     } else if (qrCode) {
       const assetRes = await client.query('SELECT id FROM assets WHERE qr_code = $1', [qrCode]);
       if (assetRes.rows.length > 0) assetId = assetRes.rows[0].id;
-      // Ja QR kods nav atrasts DB -- ticketu tapat izveidojam, bet bez asset_id piesaistes,
-      // lai lietotajs netiek bloketes ja uzlima vel nav reistreta sistema.
     }
 
-    // Apakškategorija (piem. "Laptops") VAI konkrēta reģistrēta programma
-    // (kad kategorija ir "Programmas") -- validējam, ka ID tiešām eksistē.
-    let validSubcategoryId = null;
-    if (subcategoryId) {
-      const scRes = await client.query('SELECT id FROM subcategories WHERE id = $1', [subcategoryId]);
-      if (scRes.rows.length > 0) validSubcategoryId = scRes.rows[0].id;
-    }
     let validApplicationId = null;
     if (applicationId) {
       const appRes = await client.query('SELECT id FROM applications WHERE id = $1', [applicationId]);
@@ -169,12 +163,10 @@ router.post('/', async (req, res) => {
     const ticketNumber = await generateTicketNumber(client);
     const ticketRes = await client.query(
       `INSERT INTO tickets (ticket_number, title, description, category_id, asset_id,
-                             subcategory_id, application_id,
-                             reporter_id, priority, source, custom_fields)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'mobile',$10) RETURNING *`,
+                             application_id, reporter_id, priority, source, custom_fields)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'mobile',$9) RETURNING *`,
       [ticketNumber, title, description || null, category.id, assetId,
-       validSubcategoryId, validApplicationId,
-       req.user.id, priority || category.default_priority, JSON.stringify(sanitizedCustom)]
+       validApplicationId, req.user.id, priority || category.default_priority, JSON.stringify(sanitizedCustom)]
     );
     const ticket = ticketRes.rows[0];
 
