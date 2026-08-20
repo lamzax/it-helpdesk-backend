@@ -72,22 +72,14 @@ CREATE TABLE sla_policies (
 -- 3. IEKARTU (ASSET) PARVALDIBA
 -- ============================================================
 
--- Iekartu tipi: telefoni, datori, monitori, tikla iekartas, perifierija, printeri, cits
-CREATE TABLE asset_categories (
-    id              SMALLSERIAL PRIMARY KEY,
-    code            TEXT NOT NULL UNIQUE,        -- 'phone','computer','monitor','network','peripheral','printer','camera','other'
-    name_lv         TEXT NOT NULL,
-    name_en         TEXT NOT NULL
-);
-
--- Galvena iekartu tabula -- aptver VISU IT inventaru (ari tikla iekartas un
--- kameras, ko iepriekš skenēja ar QR ticketu izveidei -- tas turpina stradat,
--- jo katrai iekartai joprojam ir qr_code).
+-- Galvena iekartu tabula -- aptver VISU IT inventaru. Kategorija izmanto TO
+-- PAŠU vienoto "categories" koku, ko lieto ticketi (nevis atseviškku tabulu),
+-- lai iekārtu un ticketu kategorijas vienmēr saskan.
 CREATE TABLE assets (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     asset_tag       TEXT NOT NULL,                -- iekšējais inventāra Nr, piem. "IT-000231"
     qr_code         TEXT,                         -- QR uzlīmes kods (skenē ticketu izveidei)
-    category_id     SMALLINT NOT NULL REFERENCES asset_categories(id),
+    category_id     SMALLINT REFERENCES categories(id) ON DELETE SET NULL,
     name            TEXT NOT NULL,                -- piem. "Dell Latitude 5440 - J.Berzins"
     manufacturer    TEXT,
     model           TEXT,
@@ -158,7 +150,8 @@ CREATE TABLE applications (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            TEXT NOT NULL,
     vendor          TEXT,
-    category        TEXT,                         -- piem. 'productivity','security','erp','design'
+    category        TEXT DEFAULT 'Programma',     -- vienmēr "Programma" -- tā ir Pamatkategorija
+    category_id     SMALLINT REFERENCES categories(id) ON DELETE SET NULL, -- saite uz atbilstošo apakškategoriju "Programmas" kokā
     description     TEXT,
     is_active       BOOLEAN NOT NULL DEFAULT true,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -410,7 +403,8 @@ INSERT INTO categories (code, name_lv, name_en, default_priority, sort_order, pa
 INSERT INTO categories (name_lv, name_en, sort_order, parent_id)
 SELECT v.name_lv, v.name_en, v.ord, c.id FROM categories c,
     (VALUES ('Laptops','Laptop',1),('Telefons','Phone',2),('Monitors','Monitor',3),
-            ('Klaviatūra','Keyboard',4),('Pele','Mouse',5),('Planšete','Tablet',6)
+            ('Klaviatūra','Keyboard',4),('Pele','Mouse',5),('Planšete','Tablet',6),
+            ('Perifērija','Peripheral',7)
     ) AS v(name_lv, name_en, ord)
 WHERE c.code = 'personal_devices';
 
@@ -427,11 +421,10 @@ SELECT v.name_lv, v.name_en, v.ord, c.id FROM categories c,
             ('Pritunl','Pritunl',4),('Terminal','Terminal',5),('APP','APP',6),('SQL','SQL',7),
             ('Unifi','Unifi',8),('Servertelpa-SW','Server room SW',9),('Ražošanas SW','Production SW',10),
             ('Router','Router',11),('QNAP','QNAP',12),('UPS','UPS',13),
-            ('Loģistikas meeting room','Logistics meeting room',14),('Meeting room','Meeting room',15)
+            ('Loģistikas meeting room','Logistics meeting room',14),('Meeting room','Meeting room',15),
+            ('Kameras','Cameras',16)
     ) AS v(name_lv, name_en, ord)
 WHERE c.code = 'network_server';
--- "Programmas" apakškategorijas NAV šeit -- tās nāk dinamiski no
--- "applications" tabulas (skat. INSERT INTO applications zemāk).
 
 INSERT INTO sla_policies (category_id, priority, response_minutes, resolve_minutes)
 SELECT id, 'critical', 15, 240 FROM categories WHERE parent_id IS NULL
@@ -441,16 +434,6 @@ UNION ALL
 SELECT id, 'medium', 120, 1440 FROM categories WHERE parent_id IS NULL
 UNION ALL
 SELECT id, 'low', 480, 4320 FROM categories WHERE parent_id IS NULL;
-
-INSERT INTO asset_categories (code, name_lv, name_en) VALUES
-    ('phone',      'Telefons',         'Phone'),
-    ('computer',   'Dators',           'Computer'),
-    ('monitor',    'Monitors',         'Monitor'),
-    ('network',    'Tikla iekarta',    'Network equipment'),
-    ('peripheral', 'Perifierija',      'Peripheral'),
-    ('printer',    'Printeris',        'Printer'),
-    ('camera',     'Kamera',           'Camera'),
-    ('other',      'Cita iekarta',     'Other equipment');
 
 INSERT INTO access_systems (code, name, description) VALUES
     ('vpn',         'VPN piekluve',        'Attaluma piekluve uznemuma tiklam'),
@@ -464,12 +447,20 @@ INSERT INTO access_systems (code, name, description) VALUES
     ('vpn_computer', 'VPN (dators)',             'VPN piekluve no darba/personigā datora'),
     ('vpn_phone',    'VPN (telefons)',           'VPN piekluve no mobila telefona');
 
--- Sākotnēji reģistrētās programmas -- kalpo par "Programmas" kategorijas
--- apakškategoriju sarakstu ticketa formā (skat. subcategories piezīmi augstāk)
+-- Sākotnēji reģistrētās programmas ("Programmas" ir Pamatkategorija) --
+-- katrai automātiski izveido arī atbilstošu apakškategoriju, lai tā redzama
+-- gan "Programmas" sadaļā, gan Kategoriju sadaļā.
 INSERT INTO applications (name, vendor, category) VALUES
-    ('Axapta', NULL, 'registered'), ('MyCargo', NULL, 'registered'), ('Mapon', NULL, 'registered'),
-    ('Edge', NULL, 'registered'), ('Word', NULL, 'registered'), ('Excel', NULL, 'registered'),
-    ('Outlook', NULL, 'registered'), ('Teams', NULL, 'registered'), ('Whatsapp', NULL, 'registered'),
-    ('Monday', NULL, 'registered'), ('Chrome', NULL, 'registered'), ('Sharepoint', NULL, 'registered'),
-    ('OneDrive', NULL, 'registered'), ('Qlik', NULL, 'registered'), ('Svari', NULL, 'registered'),
-    ('AVS', NULL, 'registered'), ('Eparaksts', NULL, 'registered');
+    ('Axapta', NULL, 'Programma'), ('MyCargo', NULL, 'Programma'), ('Mapon', NULL, 'Programma'),
+    ('Edge', NULL, 'Programma'), ('Word', NULL, 'Programma'), ('Excel', NULL, 'Programma'),
+    ('Outlook', NULL, 'Programma'), ('Teams', NULL, 'Programma'), ('Whatsapp', NULL, 'Programma'),
+    ('Monday', NULL, 'Programma'), ('Chrome', NULL, 'Programma'), ('Sharepoint', NULL, 'Programma'),
+    ('OneDrive', NULL, 'Programma'), ('Qlik', NULL, 'Programma'), ('Svari', NULL, 'Programma'),
+    ('AVS', NULL, 'Programma'), ('Eparaksts', NULL, 'Programma');
+
+INSERT INTO categories (name_lv, name_en, sort_order, parent_id)
+SELECT a.name, a.name, 0, c.id FROM applications a, categories c WHERE c.code = 'programs';
+
+UPDATE applications a SET category_id = sub.id
+FROM categories sub JOIN categories root ON root.id = sub.parent_id
+WHERE root.code = 'programs' AND sub.name_lv = a.name;
