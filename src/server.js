@@ -39,7 +39,12 @@ app.use('/api/custom-fields', customFieldsRouter);
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Web admin panelis -- statiski faili, pieejami http://localhost:3000/admin
-app.use('/admin', express.static(path.join(__dirname, '../public/admin')));
+// "Cache-Control: no-cache" -- lai pārlūks VIENMĒR pārbauda, vai admin JS/HTML
+// fails nav mainījies, nevis rāda vecu versiju no kešatmiņas (tas iepriekš
+// radīja apjukumu -- izmaiņas šķita "nestrādājam", kaut serverī tās jau bija).
+app.use('/admin', express.static(path.join(__dirname, '../public/admin'), {
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+}));
 
 app.use((err, req, res, next) => {
   console.error(err);
