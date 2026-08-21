@@ -433,6 +433,11 @@ async function loadCategoryTree() {
 function renderCategoryRows() {
   const tbody = document.querySelector('#categoriesTable tbody');
   const search = document.getElementById('categorySearch')?.value.trim() || '';
+  const isProgramsRow = (c) => c.code === 'programs' || c.parent_code === 'programs';
+  const actionsFor = (c, isRoot) => isProgramsRow(c)
+    ? `<span class="muted">Pārvaldiet "Programmas" sadaļā</span>`
+    : `<button class="btn btn-sm btn-outline" onclick="openCategoryForm(${c.id})">Rediģēt</button>
+       <button class="btn btn-sm btn-red" onclick="deleteCategory(${c.id}, ${isRoot})">Dzēst</button>`;
 
   if (search) {
     // Meklēšanas režīmā serveris atgriež TIKAI atbilstošās rindas (var būt
@@ -443,10 +448,7 @@ function renderCategoryRows() {
         <td></td>
         <td>${c.parent_id ? `<span class="muted">${esc(c.parent_name || '')} ›</span> ` : ''}${esc(c.name_lv)}</td>
         <td>${c.parent_id ? 'Apakškategorija' : 'Pamatkategorija'}</td>
-        <td>
-          <button class="btn btn-sm btn-outline" onclick="openCategoryForm(${c.id})">Rediģēt</button>
-          <button class="btn btn-sm btn-red" onclick="deleteCategory(${c.id}, ${!c.parent_id})">Dzēst</button>
-        </td>
+        <td>${actionsFor(c, !c.parent_id)}</td>
       </tr>`).join('');
     tbody.innerHTML = rows || `<tr><td colspan="4" class="empty">Nav rezultātu</td></tr>`;
     return;
@@ -463,12 +465,9 @@ function renderCategoryRows() {
           <button class="btn btn-sm btn-outline" ${catIdx === 0 ? 'disabled' : ''} onclick="moveCategory(${cat.id}, -1)">↑</button>
           <button class="btn btn-sm btn-outline" ${catIdx === roots.length - 1 ? 'disabled' : ''} onclick="moveCategory(${cat.id}, 1)">↓</button>
         </td>
-        <td><b>${esc(cat.name_lv)}</b></td>
+        <td><b>${esc(cat.name_lv)}</b>${cat.code === 'programs' ? ' <span class="muted">(sinhronizēts ar "Programmas" sadaļu)</span>' : ''}</td>
         <td>Pamatkategorija</td>
-        <td>
-          <button class="btn btn-sm btn-outline" onclick="openCategoryForm(${cat.id})">Rediģēt</button>
-          <button class="btn btn-sm btn-red" onclick="deleteCategory(${cat.id}, true)">Dzēst</button>
-        </td>
+        <td>${actionsFor(cat, true)}</td>
       </tr>`);
 
     children.forEach((sub, subIdx) => {
@@ -480,10 +479,7 @@ function renderCategoryRows() {
           </td>
           <td style="padding-left: 28px">↳ ${esc(sub.name_lv)}</td>
           <td>Apakškategorija</td>
-          <td>
-            <button class="btn btn-sm btn-outline" onclick="openCategoryForm(${sub.id})">Rediģēt</button>
-            <button class="btn btn-sm btn-red" onclick="deleteCategory(${sub.id}, false)">Dzēst</button>
-          </td>
+          <td>${actionsFor({ ...sub, parent_code: cat.code }, false)}</td>
         </tr>`);
     });
   });
@@ -522,7 +518,7 @@ async function moveSubcategory(parentId, subId, direction) {
 // kurai pamatkategorijai tā pieder).
 function openCategoryForm(editCategoryId) {
   const editing = editCategoryId ? categoryTreeCache.find((c) => c.id === editCategoryId) : null;
-  const roots = categoryTreeCache.filter((c) => !c.parent_id);
+  const roots = categoryTreeCache.filter((c) => !c.parent_id && c.code !== 'programs');
   openModal(`
     <h2>${editing ? 'Rediģēt kategoriju' : 'Jauna kategorija'}</h2>
     ${!editing ? `
@@ -536,6 +532,7 @@ function openCategoryForm(editCategoryId) {
         <select id="f_catParent">
           ${roots.map((c) => `<option value="${c.id}">${esc(c.name_lv)}</option>`).join('')}
         </select>
+        <p class="muted">("Programmas" nav sarakstā -- programmas pievieno "Programmas" sadaļā)</p>
       </div>
     ` : `<p class="muted">${editing.parent_id ? 'Apakškategorija (' + esc(editing.parent_name) + ')' : 'Pamatkategorija'}</p>`}
     <label>Nosaukums *</label>
