@@ -72,14 +72,25 @@ CREATE TABLE sla_policies (
 -- 3. IEKARTU (ASSET) PARVALDIBA
 -- ============================================================
 
--- Galvena iekartu tabula -- aptver VISU IT inventaru. Kategorija izmanto TO
--- PAŠU vienoto "categories" koku, ko lieto ticketi (nevis atseviškku tabulu),
--- lai iekārtu un ticketu kategorijas vienmēr saskan.
+-- Iekārtu kategorijas -- SAVS neatkarīgs 3-slāņu koks (nevis kopīgs ar
+-- ticketu "categories" koku), lai iekārtu iekšējā organizācija varētu būt
+-- padziļināta bez ietekmes uz ticketu reģistrācijas plūsmu.
+CREATE TABLE asset_categories_tree (
+    id              SERIAL PRIMARY KEY,
+    parent_id       INTEGER REFERENCES asset_categories_tree(id) ON DELETE CASCADE,
+    name_lv         TEXT NOT NULL,
+    name_en         TEXT NOT NULL,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_asset_categories_tree_parent ON asset_categories_tree (parent_id, sort_order);
+
+-- Galvena iekartu tabula -- aptver VISU IT inventaru.
 CREATE TABLE assets (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     asset_tag       TEXT NOT NULL,                -- iekšējais inventāra Nr, piem. "IT-000231"
     qr_code         TEXT,                         -- QR uzlīmes kods (skenē ticketu izveidei)
-    category_id     SMALLINT REFERENCES categories(id) ON DELETE SET NULL,
+    category_id     INTEGER REFERENCES asset_categories_tree(id) ON DELETE SET NULL,
     name            TEXT NOT NULL,                -- piem. "Dell Latitude 5440 - J.Berzins"
     manufacturer    TEXT,
     model           TEXT,
@@ -331,6 +342,22 @@ CREATE TABLE push_tokens (
     UNIQUE (token)
 );
 
+-- Vispārīga vēstures tabula -- jebkuras sadaļas statusu/datumu izmaiņas,
+-- lai tās varētu apskatīt un eksportēt (skat. migrāciju 009 komentārus).
+CREATE TABLE entity_history (
+    id              BIGSERIAL PRIMARY KEY,
+    entity_type     TEXT NOT NULL CHECK (entity_type IN ('asset','application','phone_number','access_right')),
+    entity_id       UUID NOT NULL,
+    action          TEXT NOT NULL,
+    field_name      TEXT,
+    old_value       TEXT,
+    new_value       TEXT,
+    changed_by      UUID REFERENCES users(id),
+    changed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    notes           TEXT
+);
+CREATE INDEX idx_entity_history_lookup ON entity_history (entity_type, entity_id, changed_at DESC);
+
 -- ============================================================
 -- 7.1 PIELĀGOTIE LAUKI (custom fields) -- admins var pats definēt papildu
 -- laukus iekārtām, ticketiem, aplikācijām un tālruņu numuriem, bez tabulas
@@ -434,6 +461,39 @@ UNION ALL
 SELECT id, 'medium', 120, 1440 FROM categories WHERE parent_id IS NULL
 UNION ALL
 SELECT id, 'low', 480, 4320 FROM categories WHERE parent_id IS NULL;
+
+-- Iekārtu kategoriju koks (SAVS, neatkarīgs no ticketu kategorijām)
+INSERT INTO asset_categories_tree (name_lv, name_en, sort_order, parent_id) VALUES
+    ('Personīgās iekārtas', 'Personal devices', 1, NULL),
+    ('Printeri',            'Printers',         2, NULL),
+    ('Tīkls/Serveris',      'Network/Server',   3, NULL),
+    ('Kameras',             'Cameras',          4, NULL),
+    ('Cits',                'Other',            5, NULL);
+
+INSERT INTO asset_categories_tree (name_lv, name_en, sort_order, parent_id)
+SELECT v.name_lv, v.name_en, v.ord, c.id FROM asset_categories_tree c,
+    (VALUES ('Laptops','Laptop',1),('Telefons','Phone',2),('Monitors','Monitor',3),
+            ('Klaviatūra','Keyboard',4),('Pele','Mouse',5),('Planšete','Tablet',6),
+            ('Perifērija','Peripheral',7)
+    ) AS v(name_lv, name_en, ord)
+WHERE c.name_lv = 'Personīgās iekārtas' AND c.parent_id IS NULL;
+
+INSERT INTO asset_categories_tree (name_lv, name_en, sort_order, parent_id)
+SELECT v.name_lv, v.name_en, v.ord, c.id FROM asset_categories_tree c,
+    (VALUES ('1.stāvs','1st floor',1),('2.stāvs','2nd floor',2),('3.stāvs','3rd floor',3),
+            ('Serviss','Service',4),('Zebra','Zebra',5),('Brother','Brother',6)
+    ) AS v(name_lv, name_en, ord)
+WHERE c.name_lv = 'Printeri' AND c.parent_id IS NULL;
+
+INSERT INTO asset_categories_tree (name_lv, name_en, sort_order, parent_id)
+SELECT v.name_lv, v.name_en, v.ord, c.id FROM asset_categories_tree c,
+    (VALUES ('WiFi tīkls','WiFi network',1),('Vada tīkls','Wired network',2),('Proxmox','Proxmox',3),
+            ('Pritunl','Pritunl',4),('Terminal','Terminal',5),('APP','APP',6),('SQL','SQL',7),
+            ('Unifi','Unifi',8),('Servertelpa-SW','Server room SW',9),('Ražošanas SW','Production SW',10),
+            ('Router','Router',11),('QNAP','QNAP',12),('UPS','UPS',13),
+            ('Loģistikas meeting room','Logistics meeting room',14),('Meeting room','Meeting room',15)
+    ) AS v(name_lv, name_en, ord)
+WHERE c.name_lv = 'Tīkls/Serveris' AND c.parent_id IS NULL;
 
 INSERT INTO access_systems (code, name, description) VALUES
     ('vpn',         'VPN piekluve',        'Attaluma piekluve uznemuma tiklam'),
