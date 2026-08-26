@@ -63,8 +63,6 @@ async function boot() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   document.getElementById('whoAmI').textContent = state.user.display_name + ' (' + state.user.role + ')';
-  const catRes = await api('/api/assets/categories/list');
-  state.categories = catRes.categories;
   renderNav();
   renderTab();
 }
@@ -616,33 +614,131 @@ function printAssetLabels(assets) {
 // ============================================================
 let assetsCache = [];
 let assetCategoryTreeCache = [];
+let assetCatMgmtCache = [];
 
 async function loadAssetCategoryTree() {
-  const { categories } = await api('/api/assets/categories/list');
-  assetCategoryTreeCache = categories; // plakans saraksts (root+bērni), IZŅEMOT "Programmas"
+  const { categories } = await api('/api/asset-categories');
+  assetCategoryTreeCache = categories; // plakans saraksts, VISI līmeņi (koks var but 2 vai 3 dziļi)
   return categories;
 }
 
-// Renderē <select> ar <optgroup> pa pamatkategorijām -- "smuki", lai redz,
-// kas zem kā, izmantojot TIEŠI tās kategorijas, kas reģistrētas Kategoriju sadaļā.
+// Rekursīvi renderē <option> elementus zem dotā vecāka, ar "—" prefiksu par
+// katru dziļuma līmeni, lai admin panelī redz, kas zem kā (jebkāds dziļums).
+function buildAssetCategoryOptions(parentId, depth, selectedId) {
+  const children = assetCategoryTreeCache.filter((c) => c.parent_id === parentId).sort((a, b) => a.sort_order - b.sort_order);
+  return children.map((c) => {
+    const prefix = depth > 0 ? '—'.repeat(depth) + ' ' : '';
+    const option = `<option value="${c.id}" ${String(selectedId) === String(c.id) ? 'selected' : ''}>${prefix}${esc(c.name_lv)}</option>`;
+    return option + buildAssetCategoryOptions(c.id, depth + 1, selectedId);
+  }).join('');
+}
+
 function renderAssetCategorySelect(selectedId, disabled) {
-  const roots = assetCategoryTreeCache.filter((c) => !c.parent_id);
+  const roots = assetCategoryTreeCache.filter((c) => !c.parent_id).sort((a, b) => a.sort_order - b.sort_order);
   const optgroups = roots.map((root) => {
-    const children = assetCategoryTreeCache.filter((c) => c.parent_id === root.id);
     const rootOption = `<option value="${root.id}" ${String(selectedId) === String(root.id) ? 'selected' : ''}>(vispārīgi) ${esc(root.name_lv)}</option>`;
-    const childOptions = children.map((ch) =>
-      `<option value="${ch.id}" ${String(selectedId) === String(ch.id) ? 'selected' : ''}>— ${esc(ch.name_lv)}</option>`
-    ).join('');
-    return `<optgroup label="${esc(root.name_lv)}">${rootOption}${childOptions}</optgroup>`;
+    return `<optgroup label="${esc(root.name_lv)}">${rootOption}${buildAssetCategoryOptions(root.id, 1, selectedId)}</optgroup>`;
   }).join('');
   return `<select id="f_categoryId" ${disabled ? 'disabled' : ''}>
     <option value="">— nav izvēlēts —</option>${optgroups}
   </select>`;
 }
 
+// ---------- Iekārtu kategoriju pārvaldība (add/edit/delete jebkurā līmenī) ----------
+async function openAssetCategoriesModal() {
+  const { categories } = await api('/api/asset-categories');
+  assetCatMgmtCache = categories;
+  openModal(`
+    <h2>Iekārtu kategorijas</h2>
+    <p class="muted">Šis koks ir NEATKARĪGS no ticketu Kategoriju sadaļas -- paredzēts tikai Iekārtu organizēšanai.</p>
+    <div id="assetCatMgmtList">${renderAssetCatMgmtTree(null, 0)}</div>
+    <div class="modal-actions" style="justify-content: space-between; margin-top: 16px;">
+      <button class="btn btn-green" onclick="openAssetCatAddForm(null)">+ Pievienot pamatkategoriju</button>
+      <button class="btn btn-outline" onclick="closeModal(); loadAssetCategoryTree().then(loadAssets);">Aizvērt</button>
+    </div>`);
+}
+
+function renderAssetCatMgmtTree(parentId, depth) {
+  const siblings = assetCatMgmtCache.filter((c) => c.parent_id === parentId).sort((a, b) => a.sort_order - b.sort_order);
+  return siblings.map((c, idx) => `
+    <div class="history-item" style="padding-left:${depth * 20}px; display:flex; align-items:center; justify-content:space-between; gap:8px;">
+      <div>
+        <button class="btn btn-sm btn-outline" ${idx === 0 ? 'disabled' : ''} onclick="moveAssetCat(${c.id}, ${parentId || 'null'}, -1)">↑</button>
+        <button class="btn btn-sm btn-outline" ${idx === siblings.length - 1 ? 'disabled' : ''} onclick="moveAssetCat(${c.id}, ${parentId || 'null'}, 1)">↓</button>
+        ${esc(c.name_lv)}
+      </div>
+      <div>
+        <button class="btn btn-sm btn-outline" onclick="openAssetCatAddForm(${c.id})">+ apakškat.</button>
+        <button class="btn btn-sm btn-outline" onclick="openAssetCatEditForm(${c.id})">Rediģēt</button>
+        <button class="btn btn-sm btn-red" onclick="deleteAssetCat(${c.id})">Dzēst</button>
+      </div>
+    </div>
+    ${renderAssetCatMgmtTree(c.id, depth + 1)}`).join('');
+}
+
+function openAssetCatAddForm(parentId) {
+  openModal(`
+    <h2>Jauna kategorija${parentId ? ' (apakškategorija)' : ' (pamatkategorija)'}</h2>
+    <label>Nosaukums *</label><input id="f_acName" />
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="openAssetCategoriesModal()">Atcelt</button>
+      <button class="btn btn-primary" onclick="saveAssetCatAdd(${parentId || 'null'})">Saglabāt</button>
+    </div>`);
+}
+
+async function saveAssetCatAdd(parentId) {
+  const nameLv = document.getElementById('f_acName').value.trim();
+  if (!nameLv) { alert('Nosaukums ir obligāts'); return; }
+  try {
+    await api('/api/asset-categories', { method: 'POST', body: { nameLv, parentId } });
+    await openAssetCategoriesModal();
+  } catch (e) { alert(e.message); }
+}
+
+function openAssetCatEditForm(id) {
+  const cat = assetCatMgmtCache.find((c) => c.id === id);
+  openModal(`
+    <h2>Rediģēt kategoriju</h2>
+    <label>Nosaukums *</label><input id="f_acName" value="${esc(cat.name_lv)}" />
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="openAssetCategoriesModal()">Atcelt</button>
+      <button class="btn btn-primary" onclick="saveAssetCatEdit(${id})">Saglabāt</button>
+    </div>`);
+}
+
+async function saveAssetCatEdit(id) {
+  const nameLv = document.getElementById('f_acName').value.trim();
+  if (!nameLv) { alert('Nosaukums ir obligāts'); return; }
+  try {
+    await api('/api/asset-categories/' + id, { method: 'PATCH', body: { nameLv } });
+    await openAssetCategoriesModal();
+  } catch (e) { alert(e.message); }
+}
+
+async function deleteAssetCat(id) {
+  if (!confirm('Dzēst šo kategoriju? Tiks dzēstas arī visas tās apakškategorijas.')) return;
+  try {
+    await api('/api/asset-categories/' + id, { method: 'DELETE' });
+    await openAssetCategoriesModal();
+  } catch (e) { alert(e.message); }
+}
+
+async function moveAssetCat(id, parentId, direction) {
+  const siblings = assetCatMgmtCache.filter((c) => c.parent_id === parentId).sort((a, b) => a.sort_order - b.sort_order);
+  const idx = siblings.findIndex((c) => c.id === id);
+  const swapIdx = idx + direction;
+  if (swapIdx < 0 || swapIdx >= siblings.length) return;
+  const reordered = [...siblings];
+  [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
+  try {
+    await api('/api/asset-categories/reorder', { method: 'POST', body: { parentId, orderedIds: reordered.map((c) => c.id) } });
+    await openAssetCategoriesModal();
+  } catch (e) { alert(e.message); }
+}
+
 async function renderAssetsTab() {
   await loadAssetCategoryTree();
-  const roots = assetCategoryTreeCache.filter((c) => !c.parent_id);
+  const roots = assetCategoryTreeCache.filter((c) => !c.parent_id).sort((a, b) => a.sort_order - b.sort_order);
   const main = document.getElementById('mainContent');
   main.innerHTML = `
     <div class="toolbar">
@@ -650,13 +746,10 @@ async function renderAssetsTab() {
         <input type="text" id="assetSearch" placeholder="Meklēt (nosaukums, Nr, sērijas Nr)..." oninput="loadAssets()" />
         <select id="assetCategoryFilter" onchange="loadAssets()">
           <option value="">Visas kategorijas</option>
-          ${roots.map((root) => {
-            const children = assetCategoryTreeCache.filter((c) => c.parent_id === root.id);
-            return `<optgroup label="${esc(root.name_lv)}">
+          ${roots.map((root) => `<optgroup label="${esc(root.name_lv)}">
               <option value="${root.id}">(vispārīgi) ${esc(root.name_lv)}</option>
-              ${children.map((ch) => `<option value="${ch.id}">— ${esc(ch.name_lv)}</option>`).join('')}
-            </optgroup>`;
-          }).join('')}
+              ${buildAssetCategoryOptions(root.id, 1, null)}
+            </optgroup>`).join('')}
         </select>
         <select id="assetStatusFilter" onchange="loadAssets()">
           <option value="">Visi statusi</option>
@@ -664,6 +757,8 @@ async function renderAssetsTab() {
         </select>
       </div>
       <div>
+        <button class="btn btn-outline" onclick="openAssetCategoriesModal()">🗂 Kategorijas</button>
+        <button class="btn btn-outline" onclick="window.open('/api/export/assets','_blank')">⬇ Eksportēt CSV</button>
         <button class="btn btn-outline" onclick="printAssetLabels(assetsCache)">🖶 Drukāt QR uzlīmes (sarakstam)</button>
         <button class="btn btn-outline" onclick="openImportModal('assets')">⬆ Importēt no CSV (Monday)</button>
         <button class="btn btn-green" onclick="openAssetForm()">+ Pievienot iekārtu</button>
@@ -819,6 +914,7 @@ async function openAssetDetail(id) {
     ${tickets.length ? tickets.map((t) => `<div class="history-item">${esc(t.ticket_number)} — ${esc(t.title)} <span class="badge" style="background:#888">${TICKET_STATUS_LV[t.status]}</span></div>`).join('') : '<p class="muted">Nav ticketu</p>'}
 
     <div class="modal-actions">
+      <button class="btn btn-outline" onclick="window.open('/api/export/assets/${id}/history','_blank')">⬇ Eksportēt vēsturi</button>
       <button class="btn btn-outline" onclick="printAssetLabels([asset])">🖶 Drukāt QR uzlīmi</button>
       <button class="btn btn-red" onclick="deleteAsset('${id}')">Dzēst</button>
       <button class="btn btn-outline" onclick="closeModal()">Aizvērt</button>
@@ -852,6 +948,7 @@ async function renderApplicationsTab() {
     <div class="toolbar">
       <input type="text" id="appSearch" placeholder="Meklēt programmu..." oninput="loadApplications()" />
       <div>
+        <button class="btn btn-outline" onclick="window.open('/api/export/applications','_blank')">⬇ Eksportēt CSV</button>
         <button class="btn btn-outline" onclick="openImportModal('applications')">⬆ Importēt no CSV</button>
         <button class="btn btn-green" onclick="openAppForm()">+ Pievienot programmu</button>
       </div>
@@ -926,11 +1023,11 @@ async function deleteApp(id) {
 }
 
 async function openAppDetail(id) {
-  const { application, licenses, assignments } = await api('/api/applications/' + id);
+  const { application, licenses, assignments, history } = await api('/api/applications/' + id);
   const { users } = await api('/api/users');
   openModal(`
     <h2>${esc(application.name)}</h2>
-    <p class="muted">${esc(application.vendor) || ''} · ${esc(application.category) || ''}</p>
+    <p class="muted">${esc(application.vendor) || ''}</p>
 
     <div class="section-title">Piešķirt lietotājam</div>
     <div class="map-row">
@@ -945,7 +1042,13 @@ async function openAppDetail(id) {
     <div class="section-title">Piešķīrumu vēsture</div>
     ${assignments.length ? assignments.map((a) => `<div class="history-item">${esc(a.user_name || a.asset_name)} — ${fmtDateTime(a.assigned_at)} ${a.unassigned_at ? '→ ' + fmtDateTime(a.unassigned_at) : '<b>(pašlaik)</b>'} ${a.is_current ? `<button class="btn btn-sm btn-outline" onclick="revokeApp('${a.id}', '${id}')">Atsaukt</button>` : ''}</div>`).join('') : '<p class="muted">Nav ierakstu</p>'}
 
-    <div class="modal-actions"><button class="btn btn-outline" onclick="closeModal()">Aizvērt</button></div>`);
+    <div class="section-title">Izmaiņu vēsture</div>
+    ${history.length ? history.map((h) => `<div class="history-item">${fmtDateTime(h.changed_at)} — ${esc(h.action)}${h.field_name ? ': ' + esc(h.field_name) + ' "' + esc(h.old_value) + '" → "' + esc(h.new_value) + '"' : ''}${h.notes ? ' (' + esc(h.notes) + ')' : ''}${h.changed_by_name ? '<br><span class="muted">Veica: ' + esc(h.changed_by_name) + '</span>' : ''}</div>`).join('') : '<p class="muted">Nav ierakstu</p>'}
+
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="window.open('/api/export/applications','_blank')">⬇ Eksportēt CSV</button>
+      <button class="btn btn-outline" onclick="closeModal()">Aizvērt</button>
+    </div>`);
 }
 
 async function assignApp(appId) {
@@ -976,6 +1079,7 @@ async function renderPhonesTab() {
     <div class="toolbar">
       <div></div>
       <div>
+        <button class="btn btn-outline" onclick="window.open('/api/export/phone-numbers','_blank')">⬇ Eksportēt CSV</button>
         <button class="btn btn-outline" onclick="openImportModal('phone-numbers')">⬆ Importēt no CSV</button>
         <button class="btn btn-green" onclick="openPhoneForm()">+ Pievienot numuru</button>
       </div>
@@ -1000,7 +1104,7 @@ async function loadPhones() {
 
   const tbody = document.querySelector('#phonesTable tbody');
   tbody.innerHTML = phoneNumbers.length ? phoneNumbers.map((p) => `
-    <tr>
+    <tr class="clickable" onclick="openPhoneDetail('${p.id}')">
       <td>${esc(p.number)}</td><td>${esc(p.carrier) || '—'}</td><td>${esc(p.plan_name) || '—'}</td>
       <td>${esc(p.current_holder) || '—'}</td>
       ${customFieldDefs.map((f) => {
@@ -1009,10 +1113,29 @@ async function loadPhones() {
         return `<td>${esc(display)}</td>`;
       }).join('')}
       <td>
-        <button class="btn btn-sm btn-outline" onclick="openPhoneAssign('${p.id}')">Piešķirt</button>
-        <button class="btn btn-sm btn-outline" onclick="openPhoneForm('${p.id}')">Rediģēt</button>
+        <button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); openPhoneAssign('${p.id}')">Piešķirt</button>
+        <button class="btn btn-sm btn-outline" onclick="event.stopPropagation(); openPhoneForm('${p.id}')">Rediģēt</button>
       </td>
     </tr>`).join('') : `<tr><td colspan="${5 + customFieldDefs.length}" class="empty">Nav rezultātu</td></tr>`;
+}
+
+// Info logs -- pilna vēsture (piešķīrumi + lauku izmaiņas) un statuss
+async function openPhoneDetail(id) {
+  const { phoneNumber, assignments, history } = await api('/api/phone-numbers/' + id);
+  openModal(`
+    <h2>${esc(phoneNumber.number)}</h2>
+    <p class="muted">${esc(phoneNumber.carrier) || 'Operators nav norādīts'} · ${esc(phoneNumber.plan_name) || 'Plāns nav norādīts'}</p>
+
+    <div class="section-title">Piešķīrumu vēsture</div>
+    ${assignments.length ? assignments.map((a) => `<div class="history-item">${esc(a.user_name)} — ${fmtDateTime(a.assigned_at)} ${a.unassigned_at ? '→ ' + fmtDateTime(a.unassigned_at) : '<b>(pašlaik)</b>'}${a.asset_name ? '<br><span class="muted">Ierīce: ' + esc(a.asset_name) + '</span>' : ''}</div>`).join('') : '<p class="muted">Nav ierakstu</p>'}
+
+    <div class="section-title">Izmaiņu vēsture</div>
+    ${history.length ? history.map((h) => `<div class="history-item">${fmtDateTime(h.changed_at)} — ${esc(h.action)}${h.field_name ? ': ' + esc(h.field_name) + ' "' + esc(h.old_value) + '" → "' + esc(h.new_value) + '"' : ''}${h.notes ? ' (' + esc(h.notes) + ')' : ''}${h.changed_by_name ? '<br><span class="muted">Veica: ' + esc(h.changed_by_name) + '</span>' : ''}</div>`).join('') : '<p class="muted">Nav ierakstu</p>'}
+
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="window.open('/api/export/phone-numbers','_blank')">⬇ Eksportēt CSV</button>
+      <button class="btn btn-outline" onclick="closeModal()">Aizvērt</button>
+    </div>`);
 }
 
 async function openPhoneForm(id) {
@@ -1093,12 +1216,13 @@ async function loadAccessForUser() {
   const listEl = document.getElementById('accessList');
   if (!userId) { listEl.innerHTML = '<p class="muted">Izvēlieties darbinieku.</p>'; return; }
   const { accessRights } = await api('/api/access-rights?userId=' + userId);
-  listEl.innerHTML = accessRights.length ? `<table><thead><tr><th>Sistēma</th><th>Līmenis</th><th>Piešķirts</th><th>Statuss</th><th></th></tr></thead><tbody>
+  listEl.innerHTML = (accessRights.length ? `<table><thead><tr><th>Sistēma</th><th>Līmenis</th><th>Piešķirts</th><th>Statuss</th><th></th></tr></thead><tbody>
     ${accessRights.map((a) => `<tr>
       <td>${esc(a.system_name)}</td><td>${esc(a.access_level)}</td><td>${fmtDate(a.granted_at)}</td>
       <td>${a.is_current ? '<span class="badge" style="background:var(--green)">aktīva</span>' : '<span class="badge" style="background:#999">atsaukta ' + fmtDate(a.revoked_at) + '</span>'}</td>
       <td>${a.is_current ? `<button class="btn btn-sm btn-outline" onclick="revokeAccess('${a.id}')">Atsaukt</button>` : ''}</td>
-    </tr>`).join('')}</tbody></table>` : '<p class="muted">Nav piešķirtu piekļuvju.</p>';
+    </tr>`).join('')}</tbody></table>` : '<p class="muted">Nav piešķirtu piekļuvju.</p>')
+    + `<button class="btn btn-sm btn-outline" style="margin-top:10px" onclick="window.open('/api/export/access-rights?userId=${userId}','_blank')">⬇ Eksportēt CSV</button>`;
 }
 
 async function revokeAccess(id) {
@@ -1135,7 +1259,9 @@ async function grantAccess(userId) {
 async function renderEmployeesTab() {
   const main = document.getElementById('mainContent');
   main.innerHTML = `
-    <div class="toolbar"><input type="text" id="empSearch" placeholder="Meklēt darbinieku..." oninput="loadEmployees()" /><div></div></div>
+    <div class="toolbar"><input type="text" id="empSearch" placeholder="Meklēt darbinieku..." oninput="loadEmployees()" />
+      <button class="btn btn-outline" onclick="window.open('/api/export/employees','_blank')">⬇ Eksportēt CSV</button>
+    </div>
     <table id="empTable"><thead><tr><th>Vārds</th><th>E-pasts</th><th>Nodaļa</th><th>Konta veids</th><th>Loma</th><th></th></tr></thead><tbody></tbody></table>`;
   await loadEmployees();
 }
