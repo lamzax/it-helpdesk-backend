@@ -2,6 +2,7 @@ const express = require('express');
 const pool = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { sanitizeCustomFields } = require('../utils/customFields');
+const { recordFieldChange, recordAction, getHistory } = require('../utils/entityHistory');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -100,7 +101,7 @@ router.get('/:id', async (req, res) => {
        WHERE aa.application_id = $1 ORDER BY aa.assigned_at DESC`,
       [req.params.id]
     );
-    res.json({ application: appRes.rows[0], licenses: licenses.rows, assignments: assignments.rows });
+    res.json({ application: appRes.rows[0], licenses: licenses.rows, assignments: assignments.rows, history: await getHistory('application', req.params.id) });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -121,6 +122,7 @@ router.post('/', async (req, res) => {
     );
     const app = result.rows[0];
     await syncProgramCategory(app.id, app.name);
+    await recordAction('application', app.id, 'created', req.user.id, `Reģistrēta: ${app.name}`);
     res.status(201).json({ application: app });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -131,6 +133,7 @@ router.post('/', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   const { name, vendor, description, customFields } = req.body;
   try {
+    const before = await pool.query('SELECT name FROM applications WHERE id = $1', [req.params.id]);
     const sanitizedCustom = customFields !== undefined ? await sanitizeCustomFields('applications', customFields) : null;
     const result = await pool.query(
       `UPDATE applications SET
@@ -142,7 +145,10 @@ router.patch('/:id', async (req, res) => {
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Programma nav atrasta' });
     const app = result.rows[0];
-    if (name) await syncProgramCategory(app.id, app.name); // pārsauc arī saistīto kategoriju
+    if (name && before.rows[0] && before.rows[0].name !== name) {
+      await recordFieldChange('application', app.id, 'name', before.rows[0].name, name, req.user.id);
+      await syncProgramCategory(app.id, app.name); // pārsauc arī saistīto kategoriju
+    }
     res.json({ application: app });
   } catch (err) {
     res.status(500).json({ error: err.message });

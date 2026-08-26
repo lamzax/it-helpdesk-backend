@@ -27,29 +27,25 @@ router.post('/assets', async (req, res) => {
 
   const result = chunkResult();
   const categoriesRes = await pool.query(
-    `SELECT c.id, c.code, c.name_lv, c.name_en, c.parent_id,
-            (SELECT code FROM categories root WHERE root.id = COALESCE(c.parent_id, c.id)) AS root_code
-     FROM categories c WHERE is_active = true`
+    `SELECT id, parent_id, name_lv, name_en FROM asset_categories_tree`
   );
-  // "Programmas" zars netiek izmantots iekārtu kategorizēšanai (tā ir
-  // programmatūra, nevis fiziska iekārta)
-  const categories = categoriesRes.rows.filter((c) => c.root_code !== 'programs');
+  const categories = categoriesRes.rows;
 
   for (let i = 0; i < rows.length; i++) {
     const r = rows[i];
     try {
       if (!r.name || !String(r.name).trim()) throw new Error('trūkst "name"');
 
-      // Vispirms mēģina precīzi sakrist apakškategorijai (specifiskāk), tad
-      // pamatkategorijai; ja nekas nesakrīt, iekārta paliek bez kategorijas
-      // (admin var izlabot manuāli vēlāk rediģēšanas formā).
+      // Vispirms mēģina precīzi sakrist apakškategorijai/apakš-apakškategorijai
+      // (specifiskāk), tad pamatkategorijai; ja nekas nesakrīt, iekārta paliek
+      // bez kategorijas (admin var izlabot manuāli vēlāk rediģēšanas formā).
       let category = categories.find(
         (c) => c.parent_id && r.categoryCode && c.name_lv.toLowerCase() === String(r.categoryCode).toLowerCase()
       );
       if (!category) {
         category = categories.find(
           (c) => !c.parent_id && r.categoryCode &&
-            [c.code, c.name_lv, c.name_en].some((v) => v && v.toLowerCase() === String(r.categoryCode).toLowerCase())
+            [c.name_lv, c.name_en].some((v) => v && v.toLowerCase() === String(r.categoryCode).toLowerCase())
         );
       }
       const categoryId = category ? category.id : null;

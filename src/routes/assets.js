@@ -2,27 +2,42 @@ const express = require('express');
 const pool = require('../db/pool');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { sanitizeCustomFields } = require('../utils/customFields');
+const { recordFieldChange, recordAction } = require('../utils/entityHistory');
 
 const router = express.Router();
 router.use(requireAuth);
+
+// Rekursīvi uzbūvē pilnu kategorijas ceļu (piem. "Personīgās iekārtas / Pele")
+// jebkuram dziļumam (koks var but 2 vai 3 līmeņi, arī vairāk).
+async function getCategoryPath(categoryId) {
+  if (!categoryId) return null;
+  const result = await pool.query(
+    `WITH RECURSIVE path AS (
+       SELECT id, parent_id, name_lv, 0 AS depth FROM asset_categories_tree WHERE id = $1
+       UNION ALL
+       SELECT t.id, t.parent_id, t.name_lv, p.depth + 1
+       FROM asset_categories_tree t JOIN path p ON t.id = p.parent_id
+     )
+     SELECT name_lv FROM path ORDER BY depth DESC`,
+    [categoryId]
+  );
+  return result.rows.map((r) => r.name_lv).join(' / ');
+}
 
 // GET /api/assets/qr/:qrCode -- mobila app so sauc pec QR skenesanas ticketa izveidei
 router.get('/qr/:qrCode', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT a.id, a.name, a.asset_tag, a.location,
-              COALESCE(parent_c.code, c.code) AS category_code,
-              COALESCE(parent_c.name_lv, c.name_lv) AS category_name
-       FROM assets a
-       LEFT JOIN categories c ON c.id = a.category_id
-       LEFT JOIN categories parent_c ON parent_c.id = c.parent_id
-       WHERE a.qr_code = $1 AND a.is_active = true`,
+      `SELECT a.id, a.name, a.asset_tag, a.location, a.category_id
+       FROM assets a WHERE a.qr_code = $1 AND a.is_active = true`,
       [req.params.qrCode]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Iekārta ar šo QR kodu nav reģistrēta sistēmā' });
     }
-    res.json({ asset: result.rows[0] });
+    const asset = result.rows[0];
+    asset.category_name = await getCategoryPath(asset.category_id);
+    res.json({ asset });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -44,8 +59,9 @@ router.get('/', requireRole('agent', 'admin'), async (req, res) => {
     params.push(assignedTo);
     conditions.push(`EXISTS (SELECT 1 FROM asset_assignments aa WHERE aa.asset_id = a.id AND aa.is_current = true AND aa.user_id = $${params.length})`);
   }
+  conditions.push('a.is_active = true');
 
-  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const whereClause = `WHERE ${conditions.join(' AND ')}`;
   const limit = Math.min(parseInt(pageSize, 10) || 25, 100);
   const offset = (Math.max(parseInt(page, 10), 1) - 1) * limit;
   params.push(limit, offset);
@@ -54,13 +70,9 @@ router.get('/', requireRole('agent', 'admin'), async (req, res) => {
     const result = await pool.query(
       `SELECT a.id, a.asset_tag, a.qr_code, a.name, a.manufacturer, a.model, a.serial_number,
               a.status, a.location, a.vendor, a.purchase_date, a.purchase_price, a.warranty_until,
-              a.notes, a.attributes,
-              a.category_id,
-              COALESCE(parent_c.name_lv || ' / ' || c.name_lv, c.name_lv) AS category_name,
+              a.notes, a.attributes, a.category_id,
               cu.display_name AS current_holder
        FROM assets a
-       LEFT JOIN categories c ON c.id = a.category_id
-       LEFT JOIN categories parent_c ON parent_c.id = c.parent_id
        LEFT JOIN asset_assignments aa ON aa.asset_id = a.id AND aa.is_current = true
        LEFT JOIN users cu ON cu.id = aa.user_id
        ${whereClause}
@@ -68,6 +80,10 @@ router.get('/', requireRole('agent', 'admin'), async (req, res) => {
        LIMIT $${params.length - 1} OFFSET $${params.length}`,
       params
     );
+    // Kategorijas ceļu (var but 2 vai 3 līmeņi) uzbūvējam katram rezultātam atsevišķi
+    for (const row of result.rows) {
+      row.category_name = await getCategoryPath(row.category_id);
+    }
     res.json({ assets: result.rows, page: Number(page), pageSize: limit });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -78,17 +94,10 @@ router.get('/', requireRole('agent', 'admin'), async (req, res) => {
 // vēsture (ietver arī atrašanās vietas izmaiņas) + saistītie ticketi
 router.get('/:id', requireRole('agent', 'admin'), async (req, res) => {
   try {
-    const assetRes = await pool.query(
-      `SELECT a.*,
-              a.category_id,
-              COALESCE(parent_c.name_lv || ' / ' || c.name_lv, c.name_lv) AS category_name
-       FROM assets a
-       LEFT JOIN categories c ON c.id = a.category_id
-       LEFT JOIN categories parent_c ON parent_c.id = c.parent_id
-       WHERE a.id = $1`,
-      [req.params.id]
-    );
+    const assetRes = await pool.query(`SELECT * FROM assets WHERE id = $1`, [req.params.id]);
     if (assetRes.rows.length === 0) return res.status(404).json({ error: 'Iekārta nav atrasta' });
+    const asset = assetRes.rows[0];
+    asset.category_name = await getCategoryPath(asset.category_id);
 
     const assignments = await pool.query(
       `SELECT aa.id, aa.assigned_at, aa.unassigned_at, aa.is_current, aa.notes,
@@ -108,19 +117,12 @@ router.get('/:id', requireRole('agent', 'admin'), async (req, res) => {
     );
 
     const tickets = await pool.query(
-      `SELECT t.id, t.ticket_number, t.title, t.status, t.priority, t.created_at,
-              c.name_lv AS category_name
-       FROM tickets t LEFT JOIN categories c ON c.id = t.category_id
-       WHERE t.asset_id = $1 ORDER BY t.created_at DESC`,
+      `SELECT t.id, t.ticket_number, t.title, t.status, t.priority, t.created_at
+       FROM tickets t WHERE t.asset_id = $1 ORDER BY t.created_at DESC`,
       [req.params.id]
     );
 
-    res.json({
-      asset: assetRes.rows[0],
-      assignments: assignments.rows,
-      lifecycle: lifecycle.rows,
-      tickets: tickets.rows,
-    });
+    res.json({ asset, assignments: assignments.rows, lifecycle: lifecycle.rows, tickets: tickets.rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -143,7 +145,7 @@ router.post('/', requireRole('admin'), async (req, res) => {
 
     let validCategoryId = null;
     if (categoryId) {
-      const catRes = await client.query('SELECT id FROM categories WHERE id = $1', [categoryId]);
+      const catRes = await client.query('SELECT id FROM asset_categories_tree WHERE id = $1', [categoryId]);
       if (catRes.rows.length === 0) throw new Error('Nezinama kategorija');
       validCategoryId = catRes.rows[0].id;
     }
@@ -171,6 +173,7 @@ router.post('/', requireRole('admin'), async (req, res) => {
        VALUES ($1, 'purchased', $2, $3)`,
       [asset.id, `Iekārta reģistrēta sistēmā${vendor ? ' (piegādātājs: ' + vendor + ')' : ''}${location ? '. Atrašanās vieta: ' + location : ''}`, req.user.id]
     );
+    await recordAction('asset', asset.id, 'created', req.user.id, `Reģistrēta: ${asset.name}`);
 
     await client.query('COMMIT');
     res.status(201).json({ asset });
@@ -208,24 +211,29 @@ router.patch('/:id', requireRole('admin'), async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const prev = await client.query('SELECT status, location FROM assets WHERE id = $1', [req.params.id]);
+    const prev = await client.query('SELECT * FROM assets WHERE id = $1', [req.params.id]);
     if (prev.rows.length === 0) throw new Error('Iekārta nav atrasta');
+    const before = prev.rows[0];
 
-    if (req.body.status !== undefined && prev.rows[0].status !== req.body.status) {
+    if (req.body.status !== undefined && before.status !== req.body.status) {
       await client.query(
         `INSERT INTO asset_lifecycle_events (asset_id, event_type, description, performed_by)
          VALUES ($1, 'status_changed', $2, $3)`,
-        [req.params.id, `Statuss mainīts: ${prev.rows[0].status} -> ${req.body.status}`, req.user.id]
+        [req.params.id, `Statuss mainīts: ${before.status} -> ${req.body.status}`, req.user.id]
       );
+      await recordFieldChange('asset', req.params.id, 'status', before.status, req.body.status, req.user.id);
     }
-    // Atrašanās vietas maiņa arī tiek ierakstīta vēsturē (piem. migrācija starp
-    // birojiem/stāviem) -- ar datumu un to, kurš lietotājs to veica.
-    if (req.body.location !== undefined && (prev.rows[0].location || '') !== (req.body.location || '')) {
+    if (req.body.location !== undefined && (before.location || '') !== (req.body.location || '')) {
       await client.query(
         `INSERT INTO asset_lifecycle_events (asset_id, event_type, description, performed_by)
          VALUES ($1, 'transferred', $2, $3)`,
-        [req.params.id, `Atrašanās vieta mainīta: "${prev.rows[0].location || '—'}" -> "${req.body.location || '—'}"`, req.user.id]
+        [req.params.id, `Atrašanās vieta mainīta: "${before.location || '—'}" -> "${req.body.location || '—'}"`, req.user.id]
       );
+      await recordFieldChange('asset', req.params.id, 'location', before.location, req.body.location, req.user.id);
+    }
+    if (req.body.warrantyUntil !== undefined) {
+      await recordFieldChange('asset', req.params.id, 'warranty_until',
+        before.warranty_until ? before.warranty_until.toISOString().slice(0, 10) : null, req.body.warrantyUntil, req.user.id);
     }
 
     params.push(req.params.id);
@@ -233,7 +241,6 @@ router.patch('/:id', requireRole('admin'), async (req, res) => {
       `UPDATE assets SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING *`,
       params
     );
-    if (result.rows.length === 0) throw new Error('Iekārta nav atrasta');
     await client.query('COMMIT');
     res.json({ asset: result.rows[0] });
   } catch (err) {
@@ -257,13 +264,14 @@ router.delete('/:id', requireRole('admin'), async (req, res) => {
        VALUES ($1, 'disposed', 'Iekārta izņemta no aktīvās lietošanas', $2)`,
       [req.params.id, req.user.id]
     );
+    await recordAction('asset', req.params.id, 'deleted', req.user.id, 'Iekārta izņemta no aktīvās lietošanas');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// POST /api/assets/:id/assign -- piesķirt iekārtu darbiniekam (aizver iepriekšējo automātiski, DB trigeris)
+// POST /api/assets/:id/assign
 router.post('/:id/assign', requireRole('agent', 'admin'), async (req, res) => {
   const { userId, notes } = req.body;
   if (!userId) return res.status(400).json({ error: 'userId ir obligats' });
@@ -282,6 +290,7 @@ router.post('/:id/assign', requireRole('agent', 'admin'), async (req, res) => {
        VALUES ($1, 'deployed', $2, $3)`,
       [req.params.id, `Piešķirts lietotājam`, req.user.id]
     );
+    await recordAction('asset', req.params.id, 'assigned', req.user.id, `Piešķirts lietotājam`);
     await client.query('COMMIT');
     res.status(201).json({ assignment: assignRes.rows[0] });
   } catch (err) {
@@ -292,7 +301,7 @@ router.post('/:id/assign', requireRole('agent', 'admin'), async (req, res) => {
   }
 });
 
-// POST /api/assets/:id/unassign -- atgriezt iekārtu (vairs nav piešķirta nevienam)
+// POST /api/assets/:id/unassign
 router.post('/:id/unassign', requireRole('agent', 'admin'), async (req, res) => {
   const client = await pool.connect();
   try {
@@ -308,6 +317,7 @@ router.post('/:id/unassign', requireRole('agent', 'admin'), async (req, res) => 
        VALUES ($1, 'returned', 'Iekārta atgriezta noliktavā', $2)`,
       [req.params.id, req.user.id]
     );
+    await recordAction('asset', req.params.id, 'unassigned', req.user.id, 'Iekārta atgriezta noliktavā');
     await client.query('COMMIT');
     res.json({ success: true });
   } catch (err) {
@@ -315,26 +325,6 @@ router.post('/:id/unassign', requireRole('agent', 'admin'), async (req, res) => 
     res.status(400).json({ error: err.message });
   } finally {
     client.release();
-  }
-});
-
-// GET /api/assets/categories/list -- grupēts kategoriju koks (Pamatkategorija
-// + tās apakškategorijas) iekārtas pievienošanas/rediģēšanas formai admin
-// panelī. IZSLĒDZ "Programmas" zaru -- tā ir programmatūra, nevis fiziska
-// iekārta, un tiek pārvaldīta atsevišķi "Programmas" sadaļā.
-router.get('/categories/list', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT id, name_lv, name_en, parent_id, sort_order,
-              (SELECT code FROM categories root WHERE root.id = COALESCE(c.parent_id, c.id)) AS root_code
-       FROM categories c
-       WHERE is_active = true
-       ORDER BY COALESCE(parent_id, id), parent_id NULLS FIRST, sort_order, id`
-    );
-    const filtered = result.rows.filter((r) => r.root_code !== 'programs');
-    res.json({ categories: filtered });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
   }
 });
 
