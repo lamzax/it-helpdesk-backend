@@ -40,8 +40,12 @@ function closeModal() { document.getElementById('overlay').classList.remove('ope
 function openModal(html) { document.getElementById('modalContent').innerHTML = html; document.getElementById('overlay').classList.add('open'); }
 
 // ---------- Pieteikšanās ----------
+// btoa() atbalsta tikai Latin1 diapazonu -- latviešu burti (ā,č,ē,ī,ņ,š,ū,ž utt.)
+// to salauž. Tāpēc UTF-8 tekstu vispirms pārvēršam par baitiem ar
+// encodeURIComponent/unescape trikiu, un tikai tad kodējam base64.
 function buildDevToken(identifier, displayName) {
-  return btoa(JSON.stringify({ identifier, displayName }));
+  const payload = JSON.stringify({ identifier, displayName });
+  return btoa(unescape(encodeURIComponent(payload)));
 }
 
 async function doLogin() {
