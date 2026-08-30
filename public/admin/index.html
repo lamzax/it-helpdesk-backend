@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="lv">
+<head>
+<meta charset="UTF-8" />
+<title>IT Helpdesk — Admin panelis</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="style.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+</head>
+<body>
+
+<div id="loginScreen">
+  <h1>IT Helpdesk</h1>
+  <p>Admin panelis</p>
+  <input id="loginName" type="text" placeholder="Vārds Uzvārds (ja pirmā reize)" />
+  <input id="loginIdentifier" type="text" placeholder="E-pasts vai telefona numurs" />
+  <button class="btn btn-primary" onclick="doLogin()">Ielogoties</button>
+  <p class="muted" id="loginError"></p>
+  <p class="muted">Pieteikties var tikai jau reģistrēts lietotājs. Ja jūsu konts vēl nav izveidots, pieprasījums tiks nosūtīts administratoram.</p>
+</div>
+
+<div id="app">
+  <header>
+    <h1>IT Helpdesk — Admin</h1>
+    <div style="display:flex; align-items:center; gap:14px; position:relative;">
+      <input type="text" id="globalSearchInput" placeholder="🔍 Meklēt visur..." style="padding:6px 10px; border:1px solid #ddd; border-radius:8px; width:220px;" oninput="handleGlobalSearch()" />
+      <div id="globalSearchResults" class="global-search-results" style="display:none; right:120px; top:40px;"></div>
+      <span id="whoAmI"></span>
+      <button class="btn btn-outline btn-sm" onclick="logout()">Iziet</button>
+    </div>
+  </header>
+  <nav id="mainNav"></nav>
+  <main id="mainContent"></main>
+</div>
+
+<div class="overlay" id="overlay"><div class="modal" id="modalContent"></div></div>
+
+<script src="app.js"></script>
+</body>
+</html>
