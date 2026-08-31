@@ -172,6 +172,30 @@ router.delete('/fields/:fieldId', requireRole('owner', 'admin'), async (req, res
   }
 });
 
+// POST /api/modules/:id/fields/reorder -- body: { orderedIds: [...] } -- maina
+// kolonnu secību, kādā tās rādās gan ierakstu tabulā, gan pievienošanas formā.
+router.post('/:id/fields/reorder', requireRole('owner', 'admin'), async (req, res) => {
+  const { orderedIds } = req.body;
+  if (!Array.isArray(orderedIds)) return res.status(400).json({ error: 'orderedIds ir obligāts' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let i = 0; i < orderedIds.length; i++) {
+      await client.query(
+        'UPDATE module_fields SET sort_order = $1 WHERE id = $2 AND module_id = $3',
+        [i + 1, orderedIds[i], req.params.id]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(400).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
 // ============================================================
 // IERAKSTI (rindas) katrā modulī
 // ============================================================
