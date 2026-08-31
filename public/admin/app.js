@@ -349,14 +349,31 @@ async function deleteRecord(moduleId, recordId) {
 }
 
 // ---------- Lauku pārvaldība (pielāgotās kolonnas katram modulim) ----------
+// Pēc lauku pievienošanas/dzēšanas jāatsvaidzina tabula zem tās, lai jaunā
+// kolonna uzreiz redzama, nevis tikai pēc cilnes pārslēgšanas.
+async function closeFieldsModalAndRefresh(moduleId) {
+  closeModal();
+  if (moduleId === usersModuleId) {
+    await renderUsersTab();
+  } else {
+    await renderModuleView(state.currentModuleId);
+  }
+}
+
 async function openFieldsModal(moduleId) {
   const { fields } = await api('/api/modules/' + moduleId + '/fields');
+  window.__fieldsModalCache = fields; // vajadzīgs kārtošanas pogām
   const typeLabels = { text: 'Teksts', number: 'Skaitlis', boolean: 'Jā/Nē', date: 'Datums', select: 'Izvēlne' };
   openModal(`
     <h2>Lauki (kolonnas)</h2>
+    <p class="muted">Bultiņas maina secību, kādā kolonnas rādās gan tabulā, gan pievienošanas formā.</p>
     <div id="fieldsList">
-      ${fields.length ? fields.map((f) => `<div class="history-item" style="display:flex; justify-content:space-between; align-items:center;">
-        <div>${esc(f.label)} <span class="muted">(${typeLabels[f.field_type]})</span></div>
+      ${fields.length ? fields.map((f, idx) => `<div class="history-item" style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <button class="btn btn-sm btn-outline" ${idx === 0 ? 'disabled' : ''} onclick="moveField('${moduleId}', ${idx}, -1)">↑</button>
+          <button class="btn btn-sm btn-outline" ${idx === fields.length - 1 ? 'disabled' : ''} onclick="moveField('${moduleId}', ${idx}, 1)">↓</button>
+          ${esc(f.label)} <span class="muted">(${typeLabels[f.field_type]})</span>
+        </div>
         <button class="btn btn-sm btn-red" onclick="deleteField('${f.id}','${moduleId}')">Dzēst</button>
       </div>`).join('') : '<p class="muted">Vēl nav pielāgotu lauku</p>'}
     </div>
@@ -374,9 +391,21 @@ async function openFieldsModal(moduleId) {
       <textarea id="f_newFieldOptions" rows="3"></textarea>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-outline" onclick="closeModal()">Aizvērt</button>
+      <button class="btn btn-outline" onclick="closeFieldsModalAndRefresh('${moduleId}')">Aizvērt</button>
       <button class="btn btn-primary" onclick="addField('${moduleId}')">+ Pievienot lauku</button>
     </div>`);
+}
+
+async function moveField(moduleId, idx, direction) {
+  const fields = window.__fieldsModalCache;
+  const swapIdx = idx + direction;
+  if (swapIdx < 0 || swapIdx >= fields.length) return;
+  const reordered = [...fields];
+  [reordered[idx], reordered[swapIdx]] = [reordered[swapIdx], reordered[idx]];
+  try {
+    await api('/api/modules/' + moduleId + '/fields/reorder', { method: 'POST', body: { orderedIds: reordered.map((f) => f.id) } });
+    await openFieldsModal(moduleId);
+  } catch (e) { alert(e.message); }
 }
 
 async function addField(moduleId) {
