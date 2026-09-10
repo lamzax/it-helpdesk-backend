@@ -27,7 +27,7 @@ async function recordHistory(entityId, action, fieldName, oldValue, newValue, us
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, parent_id, name, sort_order, icon FROM modules ORDER BY parent_id NULLS FIRST, sort_order, name`
+      `SELECT id, parent_id, name, sort_order, icon, system_key FROM modules ORDER BY parent_id NULLS FIRST, sort_order, name`
     );
     res.json({ modules: result.rows });
   } catch (err) {
