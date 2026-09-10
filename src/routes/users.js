@@ -121,7 +121,7 @@ router.post('/', requireRole('owner', 'admin'), async (req, res) => {
 
 // PATCH /api/users/:id -- rediģēt (loma, bloķēšana, papildu lauki)
 router.patch('/:id', requireRole('owner', 'admin'), async (req, res) => {
-  const { displayName, role, isBlocked, data } = req.body;
+  const { displayName, email, phone, role, isBlocked, data } = req.body;
   if (role !== undefined && role !== 'user' && req.user.role !== 'owner') {
     return res.status(403).json({ error: 'Tikai Owner var piešķirt Admin vai Owner tiesības' });
   }
@@ -132,12 +132,20 @@ router.patch('/:id', requireRole('owner', 'admin'), async (req, res) => {
     if (prev.role === 'owner' && req.user.id !== req.params.id) {
       return res.status(403).json({ error: 'Owner kontu nevar rediģēt cits lietotājs' });
     }
+    if (email !== undefined && !email && !phone && !prev.phone) {
+      return res.status(400).json({ error: 'Jānorāda vismaz e-pasts vai telefona numurs' });
+    }
+    if (phone !== undefined && !phone && !email && !prev.email) {
+      return res.status(400).json({ error: 'Jānorāda vismaz e-pasts vai telefona numurs' });
+    }
 
     if (role !== undefined && role !== prev.role) await recordUserHistory(req.params.id, 'field_changed', 'role', prev.role, role, req.user.id);
     if (isBlocked !== undefined && isBlocked !== prev.is_blocked) {
       await recordUserHistory(req.params.id, 'field_changed', 'is_blocked', prev.is_blocked, isBlocked, req.user.id,
         isBlocked ? 'Konts bloķēts' : 'Konts atbloķēts');
     }
+    if (email !== undefined && email !== prev.email) await recordUserHistory(req.params.id, 'field_changed', 'email', prev.email, email, req.user.id);
+    if (phone !== undefined && phone !== prev.phone) await recordUserHistory(req.params.id, 'field_changed', 'phone', prev.phone, phone, req.user.id);
     let mergedData = prev.data;
     if (data !== undefined) {
       mergedData = { ...prev.data, ...data };
@@ -150,12 +158,16 @@ router.patch('/:id', requireRole('owner', 'admin'), async (req, res) => {
 
     const result = await pool.query(
       `UPDATE users SET display_name = COALESCE($1, display_name), role = COALESCE($2, role),
-         is_blocked = COALESCE($3, is_blocked), data = $4
+         is_blocked = COALESCE($3, is_blocked), data = $4,
+         email = CASE WHEN $6 THEN $7 ELSE email END,
+         phone = CASE WHEN $8 THEN $9 ELSE phone END
        WHERE id = $5 RETURNING *`,
-      [displayName, role, isBlocked, JSON.stringify(mergedData), req.params.id]
+      [displayName, role, isBlocked, JSON.stringify(mergedData), req.params.id,
+       email !== undefined, email || null, phone !== undefined, phone || null]
     );
     res.json({ user: result.rows[0] });
   } catch (err) {
+    if (err.code === '23505') return res.status(400).json({ error: 'Šis e-pasts vai telefona numurs jau pieder citam lietotājam' });
     res.status(500).json({ error: err.message });
   }
 });
