@@ -43,18 +43,17 @@ function openModal(html) { document.getElementById('modalContent').innerHTML = h
 // btoa() atbalsta tikai Latin1 diapazonu -- latviešu burti (ā,č,ē,ī,ņ,š,ū,ž utt.)
 // to salauž. Tāpēc UTF-8 tekstu vispirms pārvēršam par baitiem ar
 // encodeURIComponent/unescape trikiu, un tikai tad kodējam base64.
-function buildDevToken(identifier, displayName) {
-  const payload = JSON.stringify({ identifier, displayName });
+function buildDevToken(identifier) {
+  const payload = JSON.stringify({ identifier });
   return btoa(unescape(encodeURIComponent(payload)));
 }
 
 async function doLogin() {
-  const name = document.getElementById('loginName').value.trim();
   const identifier = document.getElementById('loginIdentifier').value.trim();
   const errEl = document.getElementById('loginError');
   errEl.textContent = '';
   if (!identifier) { errEl.textContent = 'Ievadiet e-pastu vai telefona numuru.'; return; }
-  state.token = buildDevToken(identifier, name);
+  state.token = buildDevToken(identifier);
   try {
     const { user } = await api('/api/users/me');
     localStorage.setItem('admin_token', state.token);
@@ -93,25 +92,43 @@ function isOwnerOrAdmin() { return state.user.role === 'owner' || state.user.rol
 
 // ---------- Navigācija ----------
 function renderNav() {
-  const roots = state.modulesTree.filter((m) => !m.parent_id && m.system_key !== 'users').sort((a, b) => a.sort_order - b.sort_order);
   const nav = document.getElementById('mainNav');
   const fixedTabs = [['tickets', 'Ticketi']];
-  if (isOwnerOrAdmin()) {
-    fixedTabs.push(['users', 'Lietotāji'], ['access_requests', 'Piekļuves pieprasījumi']);
-  }
-  let html = fixedTabs.map(([key, label]) => `<button class="${state.tab === key ? 'active' : ''}" onclick="switchFixedTab('${key}')">${label}</button>`).join('');
-  html += roots.map((m) => `<button class="${state.tab === m.id ? 'active' : ''}" onclick="switchModuleTab('${m.id}')">${m.icon ? m.icon + ' ' : ''}${esc(m.name)}</button>`).join('');
-  if (isOwnerOrAdmin()) {
-    html += `<button onclick="addRootModule()" title="Pievienot jaunu pamatkategoriju (cilni)">+ Jauna kategorija</button>`;
-  }
+  if (isOwnerOrAdmin()) fixedTabs.push(['users', 'Lietotāji'], ['access_requests', 'Piekļuves pieprasījumi']);
+  let html = `<div class="sidebar-section">` +
+    fixedTabs.map(([key, label]) => `<button class="nav-item ${state.tab === key ? 'active' : ''}" onclick="switchFixedTab('${key}')">${label}</button>`).join('') +
+    `</div>`;
+  html += `<div class="sidebar-section sidebar-tree">${renderModuleTreeNav(null, 0)}</div>`;
+  if (isOwnerOrAdmin()) html += `<button class="nav-add-root" onclick="addRootModule()">+ Jauna kategorija</button>`;
   nav.innerHTML = html;
 }
 
+// Rekursīvi renderē VISU koku (jebkurš dziļums) kreisajā sānjoslā -- katrs
+// mezgls ir tieši klikšķināms, lai pa vidu paliktu tikai tabula.
+function renderModuleTreeNav(parentId, depth) {
+  const children = state.modulesTree.filter((m) => m.parent_id === parentId && m.system_key !== 'users').sort((a, b) => a.sort_order - b.sort_order);
+  return children.map((m) => {
+    const isActive = state.tab === 'module' && state.currentModuleId === m.id;
+    return `
+      <div class="tree-node">
+        <div class="tree-node-row ${isActive ? 'active' : ''}" style="padding-left:${18 + depth * 14}px" onclick="switchModuleTab('${m.id}')">
+          <span class="tree-node-label">${m.icon ? m.icon + ' ' : ''}${esc(m.name)}</span>
+          ${isOwnerOrAdmin() ? `<span class="tree-node-actions">
+            <button onclick="event.stopPropagation(); addSubModule('${m.id}')" title="Pievienot apakškategoriju">+</button>
+            <button onclick="event.stopPropagation(); renameModulePrompt('${m.id}')" title="Pārsaukt">✎</button>
+            <button onclick="event.stopPropagation(); deleteModulePrompt('${m.id}')" title="Dzēst">🗑</button>
+          </span>` : ''}
+        </div>
+        ${renderModuleTreeNav(m.id, depth + 1)}
+      </div>`;
+  }).join('');
+}
+
 function switchFixedTab(key) { state.tab = key; renderNav(); renderTab(); }
-function switchModuleTab(moduleId) { state.tab = moduleId; state.currentModuleId = moduleId; renderNav(); renderTab(); }
+function switchModuleTab(moduleId) { state.tab = 'module'; state.currentModuleId = moduleId; renderNav(); renderTab(); }
 
 async function addRootModule() {
-  const name = prompt('Jaunās pamatkategorijas (cilnes) nosaukums:');
+  const name = prompt('Jaunās pamatkategorijas nosaukums:');
   if (!name || !name.trim()) return;
   try {
     const { module } = await api('/api/modules', { method: 'POST', body: { name: name.trim() } });
@@ -149,11 +166,7 @@ function handleGlobalSearch() {
 async function jumpToRecord(moduleId, recordId) {
   document.getElementById('globalSearchResults').style.display = 'none';
   document.getElementById('globalSearchInput').value = '';
-  // Atrod moduli tā, lai state.tab norādītu uz pareizo SAKNES cilni
-  let m = state.modulesTree.find((x) => x.id === moduleId);
-  let rootId = moduleId;
-  while (m && m.parent_id) { rootId = m.parent_id; m = state.modulesTree.find((x) => x.id === m.parent_id); }
-  state.tab = rootId; state.currentModuleId = moduleId;
+  state.tab = 'module'; state.currentModuleId = moduleId;
   renderNav();
   await renderModuleView(moduleId);
   openRecordDetail(recordId, moduleId);
@@ -165,7 +178,7 @@ document.addEventListener('click', (e) => {
 });
 
 // ============================================================
-// MODUĻA SKATS (kategorijas/apakškategorijas -- bezgalīgi ligzdojams)
+// MODUĻA SKATS -- navigācija notiek sānjoslā, šeit paliek TIKAI tabula
 // ============================================================
 let currentModuleFields = [];
 let currentModuleRecords = [];
@@ -173,31 +186,12 @@ let currentModuleRecords = [];
 async function renderModuleView(moduleId) {
   const main = document.getElementById('mainContent');
   const module = state.modulesTree.find((m) => m.id === moduleId);
-  if (!module) { main.innerHTML = '<p class="empty">Modulis nav atrasts</p>'; return; }
+  if (!module) { main.innerHTML = '<p class="empty">Izvēlieties kategoriju kreisajā sānjoslā</p>'; return; }
 
-  const children = state.modulesTree.filter((m) => m.parent_id === moduleId).sort((a, b) => a.sort_order - b.sort_order);
   currentModuleFields = (await api('/api/modules/' + moduleId + '/fields')).fields;
 
   main.innerHTML = `
     <div class="breadcrumb">${renderBreadcrumb(moduleId)}</div>
-
-    <div class="folder-grid">
-      ${children.map((c) => `
-        <div class="folder-card" onclick="switchModuleTab('${c.id}')">
-          <div class="folder-actions">
-            <button onclick="event.stopPropagation(); renameModulePrompt('${c.id}')">✎</button>
-            <button onclick="event.stopPropagation(); deleteModulePrompt('${c.id}')">🗑</button>
-          </div>
-          <div class="folder-icon">${c.icon || '📁'}</div>
-          <div class="folder-name">${esc(c.name)}</div>
-        </div>`).join('')}
-      ${isOwnerOrAdmin() ? `<div class="folder-card add-new" onclick="addSubModule('${moduleId}')">
-          <div class="folder-icon">+</div><div class="folder-name">Jauna apakškategorija</div>
-        </div>` : ''}
-    </div>
-
-    <hr class="section-divider" />
-
     <div class="toolbar">
       <input type="text" id="recordSearch" placeholder="Meklēt šajā kategorijā..." oninput="loadModuleRecords('${moduleId}')" />
       <div>
@@ -218,9 +212,8 @@ function renderBreadcrumb(moduleId) {
   const chain = [];
   let m = state.modulesTree.find((x) => x.id === moduleId);
   while (m) { chain.unshift(m); m = state.modulesTree.find((x) => x.id === m.parent_id); }
-  return chain.map((c, i) => `${i > 0 ? '<span class="sep">/</span>' : ''}<a onclick="switchModuleTabInline('${c.id}')">${esc(c.name)}</a>`).join('');
+  return chain.map((c, i) => `${i > 0 ? '<span class="sep">/</span>' : ''}<span>${esc(c.name)}</span>`).join('');
 }
-function switchModuleTabInline(moduleId) { state.currentModuleId = moduleId; renderModuleView(moduleId); }
 
 async function addSubModule(parentId) {
   const name = prompt('Jaunās apakškategorijas nosaukums:');
@@ -628,10 +621,9 @@ function openUserForm(userId) {
   openModal(`
     <h2>${user ? 'Rediģēt lietotāju' : 'Jauns lietotājs'}</h2>
     <label>Vārds Uzvārds *</label><input id="f_userName" value="${user ? esc(user.display_name) : ''}" />
-    ${!user ? `
-      <label>E-pasts</label><input id="f_userEmail" placeholder="janis@uznemums.lv" />
-      <label>Telefona numurs</label><input id="f_userPhone" placeholder="+371..." />
-    ` : `<p class="muted">${esc(user.email) || esc(user.phone)}</p>`}
+    <label>E-pasts</label><input id="f_userEmail" value="${user ? esc(user.email) : ''}" placeholder="janis@uznemums.lv" />
+    <label>Telefona numurs</label><input id="f_userPhone" value="${user ? esc(user.phone) : ''}" placeholder="+371..." />
+    <p class="muted">Vismaz viens no laukiem (e-pasts vai telefons) ir obligāts.</p>
     <label>Loma</label>
     <select id="f_userRole" ${canEditRole ? '' : 'disabled'}>
       <option value="user" ${user && user.role === 'user' ? 'selected' : ''}>User</option>
@@ -666,10 +658,13 @@ async function saveUser(userId) {
     if (userId) {
       const payload = {
         displayName: document.getElementById('f_userName').value,
+        email: document.getElementById('f_userEmail').value.trim() || '',
+        phone: document.getElementById('f_userPhone').value.trim() || '',
         role: document.getElementById('f_userRole').value,
         isBlocked: document.getElementById('f_userBlocked').checked,
         data,
       };
+      if (!payload.email && !payload.phone) { alert('Jānorāda e-pasts vai telefons'); return; }
       await api('/api/users/' + userId, { method: 'PATCH', body: payload });
     } else {
       const payload = {

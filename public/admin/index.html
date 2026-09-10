@@ -12,7 +12,6 @@
 <div id="loginScreen">
   <h1>IT Helpdesk</h1>
   <p>Admin panelis</p>
-  <input id="loginName" type="text" placeholder="Vārds Uzvārds (ja pirmā reize)" />
   <input id="loginIdentifier" type="text" placeholder="E-pasts vai telefona numurs" />
   <button class="btn btn-primary" onclick="doLogin()">Ielogoties</button>
   <p class="muted" id="loginError"></p>
@@ -20,17 +19,27 @@
 </div>
 
 <div id="app">
-  <header>
-    <h1>IT Helpdesk — Admin</h1>
-    <div style="display:flex; align-items:center; gap:14px; position:relative;">
-      <input type="text" id="globalSearchInput" placeholder="🔍 Meklēt visur..." style="padding:6px 10px; border:1px solid #ddd; border-radius:8px; width:220px;" oninput="handleGlobalSearch()" />
-      <div id="globalSearchResults" class="global-search-results" style="display:none; right:120px; top:40px;"></div>
-      <span id="whoAmI"></span>
-      <button class="btn btn-outline btn-sm" onclick="logout()">Iziet</button>
+  <div class="layout">
+    <aside id="sidebar">
+      <div class="sidebar-logo">
+        <img src="https://viss.lv/dati/otanku_dzirnavnieks_sia/logo_otanku_dzirnavnieks_sia.jpg" alt="OtankiMill" />
+      </div>
+      <nav id="mainNav"></nav>
+    </aside>
+    <div class="main-area">
+      <header class="top-bar">
+        <div style="position:relative;">
+          <input type="text" id="globalSearchInput" placeholder="🔍 Meklēt visur..." oninput="handleGlobalSearch()" />
+          <div id="globalSearchResults" class="global-search-results" style="display:none;"></div>
+        </div>
+        <div class="user-wrap">
+          <span id="whoAmI"></span>
+          <button class="btn btn-outline btn-sm" onclick="logout()">Iziet</button>
+        </div>
+      </header>
+      <main id="mainContent"></main>
     </div>
-  </header>
-  <nav id="mainNav"></nav>
-  <main id="mainContent"></main>
+  </div>
 </div>
 
 <div class="overlay" id="overlay"><div class="modal" id="modalContent"></div></div>
