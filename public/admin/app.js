@@ -100,6 +100,10 @@ function renderNav() {
     `</div>`;
   html += `<div class="sidebar-section sidebar-tree">${renderModuleTreeNav(null, 0)}</div>`;
   if (isOwnerOrAdmin()) html += `<button class="nav-add-root" onclick="addRootModule()">+ Jauna kategorija</button>`;
+  // Fiksēta sadaļa: Kiberdrošība (neatkarīga no kategoriju koka)
+  html += `<div class="sidebar-section" style="border-top:1px solid rgba(255,255,255,0.15); margin-top:6px; padding-top:6px;">
+      <button class="nav-item ${state.tab === 'cyber' ? 'active' : ''}" onclick="switchFixedTab('cyber')">🛡️ Kiberdrošība</button>
+    </div>`;
   nav.innerHTML = html;
 }
 
@@ -141,6 +145,7 @@ function renderTab() {
   if (state.tab === 'tickets') return renderTicketsTab();
   if (state.tab === 'users') return renderUsersTab();
   if (state.tab === 'access_requests') return renderAccessRequestsTab();
+  if (state.tab === 'cyber') return renderCyberTab();
   return renderModuleView(state.currentModuleId);
 }
 
@@ -732,6 +737,384 @@ async function approveAccessRequest(id) {
 }
 async function dismissAccessRequest(id) {
   try { await api('/api/access-requests/' + id + '/dismiss', { method: 'POST' }); await loadAccessRequests(); }
+  catch (e) { alert(e.message); }
+}
+
+// ============================================================
+// KIBERDROŠĪBA — Instrukcijas / Testi / Pikšķerēšanas pārbaudes
+// ============================================================
+let cyberSub = 'articles';
+
+// Ļoti vienkāršs Markdown → HTML (## virsraksti, **treknraksts**, saraksti).
+function miniMarkdown(md) {
+  const lines = (md || '').split('\n');
+  let html = '', inUl = false, inOl = false;
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  const closeLists = () => { if (inUl) { html += '</ul>'; inUl = false; } if (inOl) { html += '</ol>'; inOl = false; } };
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (/^##\s+/.test(line)) { closeLists(); html += `<h4 style="margin:14px 0 6px;color:var(--blue)">${inline(line.replace(/^##\s+/, ''))}</h4>`; }
+    else if (/^\d+\.\s+/.test(line)) { if (!inOl) { closeLists(); html += '<ol style="line-height:1.6">'; inOl = true; } html += `<li>${inline(line.replace(/^\d+\.\s+/, ''))}</li>`; }
+    else if (/^[-*]\s+/.test(line)) { if (!inUl) { closeLists(); html += '<ul style="line-height:1.6">'; inUl = true; } html += `<li>${inline(line.replace(/^[-*]\s+/, ''))}</li>`; }
+    else if (line === '') { closeLists(); }
+    else { closeLists(); html += `<p>${inline(line)}</p>`; }
+  }
+  closeLists();
+  return html;
+}
+
+function renderCyberTab() {
+  const main = document.getElementById('mainContent');
+  const subs = [['articles', '📖 Instrukcijas'], ['tests', '📝 Testi']];
+  if (isOwnerOrAdmin()) subs.push(['phishing', '🎣 Pikšķerēšanas pārbaudes']);
+  main.innerHTML = `
+    <h2 style="margin:0 0 4px">🛡️ Kiberdrošība</h2>
+    <div class="tabs-inline" style="margin-top:12px">
+      ${subs.map(([k, l]) => `<button class="${cyberSub === k ? 'active' : ''}" onclick="switchCyberSub('${k}')">${l}</button>`).join('')}
+    </div>
+    <div id="cyberContent"></div>`;
+  renderCyberSub();
+}
+function switchCyberSub(k) { cyberSub = k; renderCyberTab(); }
+function renderCyberSub() {
+  if (cyberSub === 'articles') return renderCyberArticles();
+  if (cyberSub === 'tests') return renderCyberTests();
+  if (cyberSub === 'phishing' && isOwnerOrAdmin()) return renderCyberPhishing();
+}
+
+// ---------- Instrukcijas ----------
+async function renderCyberArticles() {
+  const box = document.getElementById('cyberContent');
+  box.innerHTML = '<p class="muted">Ielādē…</p>';
+  try {
+    const { articles } = await api('/api/training/articles');
+    box.innerHTML = `
+      ${isOwnerOrAdmin() ? `<div class="toolbar"><div></div><button class="btn btn-primary" onclick="openArticleModal()">+ Jauna instrukcija</button></div>` : ''}
+      ${articles.length ? articles.map((a) => `
+        <div style="background:#fff;border:1px solid var(--border);border-radius:12px;padding:18px 22px;margin-bottom:14px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+            <h3 style="margin:0 0 6px;color:var(--blue)">${esc(a.title)}</h3>
+            ${isOwnerOrAdmin() ? `<div style="flex-shrink:0">
+              <button class="btn btn-sm btn-outline" onclick='openArticleModal(${JSON.stringify(a).replace(/'/g, "&#39;")})'>✎</button>
+              <button class="btn btn-sm btn-red" onclick="deleteArticle('${a.id}')">🗑</button>
+            </div>` : ''}
+          </div>
+          <div class="article-body">${miniMarkdown(a.content)}</div>
+        </div>`).join('') : '<p class="empty">Vēl nav instrukciju.</p>'}`;
+  } catch (e) { box.innerHTML = `<p class="empty">Kļūda: ${esc(e.message)}</p>`; }
+}
+function openArticleModal(article) {
+  const a = article || { title: '', content: '', sort_order: 0 };
+  openModal(`
+    <h2>${article ? 'Rediģēt instrukciju' : 'Jauna instrukcija'}</h2>
+    <label>Virsraksts</label>
+    <input id="artTitle" value="${esc(a.title)}" />
+    <label>Saturs (atbalsta ## virsrakstus, **treknrakstu**, sarakstus)</label>
+    <textarea id="artContent" rows="12">${esc(a.content)}</textarea>
+    <label>Kārtas numurs</label>
+    <input id="artSort" type="number" value="${a.sort_order || 0}" />
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Atcelt</button>
+      <button class="btn btn-primary" onclick="saveArticle(${article ? `'${a.id}'` : 'null'})">Saglabāt</button>
+    </div>`);
+}
+async function saveArticle(id) {
+  const body = {
+    title: document.getElementById('artTitle').value.trim(),
+    content: document.getElementById('artContent').value,
+    sortOrder: Number(document.getElementById('artSort').value) || 0,
+  };
+  if (!body.title || !body.content) { alert('Aizpildiet virsrakstu un saturu'); return; }
+  try {
+    if (id) await api('/api/training/articles/' + id, { method: 'PATCH', body });
+    else await api('/api/training/articles', { method: 'POST', body });
+    closeModal(); renderCyberArticles();
+  } catch (e) { alert(e.message); }
+}
+async function deleteArticle(id) {
+  if (!confirm('Dzēst šo instrukciju?')) return;
+  try { await api('/api/training/articles/' + id, { method: 'DELETE' }); renderCyberArticles(); }
+  catch (e) { alert(e.message); }
+}
+
+// ---------- Testi ----------
+async function renderCyberTests() {
+  const box = document.getElementById('cyberContent');
+  box.innerHTML = '<p class="muted">Ielādē…</p>';
+  try {
+    if (isOwnerOrAdmin()) {
+      const { tests } = await api('/api/training/tests/all');
+      box.innerHTML = `
+        <div class="toolbar"><div></div><button class="btn btn-primary" onclick="openTestModal()">+ Jauns tests</button></div>
+        <table><thead><tr><th>Tests</th><th>Jautājumi</th><th>Aizpildījumi</th><th>Aktīvs</th><th></th></tr></thead><tbody>
+        ${tests.length ? tests.map((t) => `
+          <tr>
+            <td><b>${esc(t.title)}</b><br><span class="muted">${esc(t.description) || ''}</span></td>
+            <td>${t.question_count}</td>
+            <td>${t.attempt_count}</td>
+            <td>${t.is_active ? '✓' : '—'}</td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-sm btn-outline" onclick="takeTest('${t.id}')">Pildīt</button>
+              <button class="btn btn-sm btn-outline" onclick="viewTestReport('${t.id}','${esc(t.title).replace(/'/g,"")}')">Atskaite</button>
+              <button class="btn btn-sm btn-red" onclick="deleteTest('${t.id}')">🗑</button>
+            </td>
+          </tr>`).join('') : '<tr><td colspan="5" class="empty">Vēl nav testu.</td></tr>'}
+        </tbody></table>`;
+    } else {
+      const { tests } = await api('/api/training/tests');
+      box.innerHTML = `${tests.length ? `<div class="folder-grid">${tests.map((t) => `
+        <div class="folder-card" onclick="takeTest('${t.id}')" style="min-width:200px;text-align:left">
+          <div class="folder-name">${esc(t.title)}</div>
+          <div class="muted">${esc(t.description) || ''}</div>
+          <div class="muted" style="margin-top:6px">${t.question_count} jautājumi</div>
+        </div>`).join('')}</div>` : '<p class="empty">Pašlaik nav pieejamu testu.</p>'}`;
+    }
+  } catch (e) { box.innerHTML = `<p class="empty">Kļūda: ${esc(e.message)}</p>`; }
+}
+
+async function takeTest(id) {
+  try {
+    const { test, questions } = await api('/api/training/tests/' + id + '/take');
+    openModal(`
+      <h2>${esc(test.title)}</h2>
+      ${test.description ? `<p class="muted">${esc(test.description)}</p>` : ''}
+      <div id="testQuestions">
+        ${questions.map((q, i) => `
+          <div class="section-title">${i + 1}. ${esc(q.question)}</div>
+          ${(q.options || []).map((opt, oi) => `
+            <label style="display:flex;align-items:center;gap:8px;font-weight:400;margin:4px 0">
+              <input type="radio" name="q_${q.id}" value="${oi}" style="width:auto" /> ${esc(opt)}
+            </label>`).join('')}
+        `).join('')}
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-outline" onclick="closeModal()">Aizvērt</button>
+        <button class="btn btn-primary" onclick="submitTest('${id}', ${JSON.stringify(questions.map((q) => q.id))})">Iesniegt</button>
+      </div>`);
+  } catch (e) { alert(e.message); }
+}
+async function submitTest(id, questionIds) {
+  const answers = {};
+  for (const qid of questionIds) {
+    const sel = document.querySelector(`input[name="q_${qid}"]:checked`);
+    if (sel) answers[qid] = Number(sel.value);
+  }
+  try {
+    const { score, total, review } = await api('/api/training/tests/' + id + '/attempt', { method: 'POST', body: { answers } });
+    const pct = total ? Math.round((score / total) * 100) : 0;
+    openModal(`
+      <h2>Rezultāts: ${score} / ${total} (${pct}%)</h2>
+      <div class="result-box" style="background:${pct >= 70 ? '#eaf7ee' : '#fdecea'}">
+        ${pct >= 70 ? '✅ Lielisks darbs! Jūs labi protat atpazīt draudus.' : '⚠️ Ieteicams vēlreiz pārskatīt instrukcijas un mēģināt no jauna.'}
+      </div>
+      ${review.map((r, i) => `
+        <div class="history-item">
+          <b>${i + 1}. ${esc(r.question)}</b><br>
+          ${(r.options || []).map((opt, oi) => {
+            let mark = '';
+            if (oi === r.correctIndex) mark = ' ✅';
+            else if (oi === r.selectedIndex) mark = ' ❌';
+            const color = oi === r.correctIndex ? 'var(--green)' : (oi === r.selectedIndex ? 'var(--red)' : '#333');
+            return `<span style="color:${color}">${esc(opt)}${mark}</span><br>`;
+          }).join('')}
+          ${r.explanation ? `<span class="muted">💡 ${esc(r.explanation)}</span>` : ''}
+        </div>`).join('')}
+      <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Aizvērt</button></div>`);
+  } catch (e) { alert(e.message); }
+}
+async function deleteTest(id) {
+  if (!confirm('Dzēst šo testu un visus tā rezultātus?')) return;
+  try { await api('/api/training/tests/' + id, { method: 'DELETE' }); renderCyberTests(); }
+  catch (e) { alert(e.message); }
+}
+
+// Testa veidošana (owner/admin) — dinamiski jautājumi
+let testBuilderQuestions = [];
+function openTestModal() {
+  testBuilderQuestions = [{ question: '', options: ['', ''], correctIndex: 0, explanation: '' }];
+  renderTestBuilder();
+}
+function renderTestBuilder() {
+  openModal(`
+    <h2>Jauns tests</h2>
+    <label>Nosaukums</label><input id="testTitle" />
+    <label>Apraksts (neobligāts)</label><input id="testDesc" />
+    <div id="qBuilder">${testBuilderQuestions.map((q, qi) => renderQBuilder(q, qi)).join('')}</div>
+    <button class="btn btn-outline btn-sm" style="margin-top:8px" onclick="addBuilderQuestion()">+ Pievienot jautājumu</button>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Atcelt</button>
+      <button class="btn btn-primary" onclick="saveTest()">Saglabāt testu</button>
+    </div>`);
+}
+function renderQBuilder(q, qi) {
+  return `<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px">
+    <div style="display:flex;justify-content:space-between"><b>Jautājums ${qi + 1}</b>
+      ${testBuilderQuestions.length > 1 ? `<button class="btn btn-sm btn-red" onclick="removeBuilderQuestion(${qi})">✕</button>` : ''}</div>
+    <input placeholder="Jautājuma teksts" value="${esc(q.question)}" oninput="testBuilderQuestions[${qi}].question=this.value" />
+    <div style="margin-top:6px">
+      ${q.options.map((opt, oi) => `
+        <div style="display:flex;align-items:center;gap:6px;margin:3px 0">
+          <input type="radio" name="correct_${qi}" ${q.correctIndex === oi ? 'checked' : ''} onclick="testBuilderQuestions[${qi}].correctIndex=${oi}" style="width:auto" title="Pareizā atbilde" />
+          <input style="flex:1" placeholder="Atbilde ${oi + 1}" value="${esc(opt)}" oninput="testBuilderQuestions[${qi}].options[${oi}]=this.value" />
+          ${q.options.length > 2 ? `<button class="btn btn-sm btn-outline" onclick="removeBuilderOption(${qi},${oi})">✕</button>` : ''}
+        </div>`).join('')}
+      <button class="btn btn-sm btn-outline" onclick="addBuilderOption(${qi})">+ Atbilde</button>
+    </div>
+    <input style="margin-top:6px" placeholder="Skaidrojums (neobligāts)" value="${esc(q.explanation)}" oninput="testBuilderQuestions[${qi}].explanation=this.value" />
+    <div class="muted" style="margin-top:4px">Atzīmējiet pareizo atbildi ar aplīti kreisajā pusē.</div>
+  </div>`;
+}
+function addBuilderQuestion() { testBuilderQuestions.push({ question: '', options: ['', ''], correctIndex: 0, explanation: '' }); refreshBuilder(); }
+function removeBuilderQuestion(qi) { testBuilderQuestions.splice(qi, 1); refreshBuilder(); }
+function addBuilderOption(qi) { testBuilderQuestions[qi].options.push(''); refreshBuilder(); }
+function removeBuilderOption(qi, oi) {
+  testBuilderQuestions[qi].options.splice(oi, 1);
+  if (testBuilderQuestions[qi].correctIndex >= testBuilderQuestions[qi].options.length) testBuilderQuestions[qi].correctIndex = 0;
+  refreshBuilder();
+}
+function refreshBuilder() {
+  // Saglabā nosaukumu/aprakstu pirms pārzīmēšanas
+  const title = document.getElementById('testTitle')?.value || '';
+  const desc = document.getElementById('testDesc')?.value || '';
+  document.getElementById('qBuilder').innerHTML = testBuilderQuestions.map((q, qi) => renderQBuilder(q, qi)).join('');
+  if (document.getElementById('testTitle')) document.getElementById('testTitle').value = title;
+  if (document.getElementById('testDesc')) document.getElementById('testDesc').value = desc;
+}
+async function saveTest() {
+  const title = document.getElementById('testTitle').value.trim();
+  const description = document.getElementById('testDesc').value.trim();
+  if (!title) { alert('Ievadiet testa nosaukumu'); return; }
+  const questions = testBuilderQuestions.filter((q) => q.question.trim() && q.options.filter((o) => o.trim()).length >= 2);
+  if (questions.length === 0) { alert('Pievienojiet vismaz vienu jautājumu ar 2 atbildēm'); return; }
+  try {
+    await api('/api/training/tests', { method: 'POST', body: { title, description, questions } });
+    closeModal(); renderCyberTests();
+  } catch (e) { alert(e.message); }
+}
+async function viewTestReport(id, title) {
+  try {
+    const { results } = await api('/api/training/tests/' + id + '/report');
+    openModal(`
+      <h2>Atskaite: ${esc(title)}</h2>
+      <div class="toolbar"><div class="muted">${results.length} dalībnieki</div>
+        <button class="btn btn-outline btn-sm" onclick="window.open('/api/training/tests/${id}/report/export','_blank')">⬇ CSV</button></div>
+      <table><thead><tr><th>Vārds</th><th>Rezultāts</th><th>%</th><th>Datums</th></tr></thead><tbody>
+        ${results.length ? results.map((r) => {
+          const pct = r.total_questions ? Math.round((r.score / r.total_questions) * 100) : 0;
+          return `<tr><td>${esc(r.display_name)}</td><td>${r.score}/${r.total_questions}</td>
+            <td><span class="badge" style="background:${pct >= 70 ? 'var(--green)' : 'var(--red)'}">${pct}%</span></td>
+            <td>${fmtDateTime(r.completed_at)}</td></tr>`;
+        }).join('') : '<tr><td colspan="4" class="empty">Neviens vēl nav pildījis šo testu.</td></tr>'}
+      </tbody></table>
+      <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Aizvērt</button></div>`);
+  } catch (e) { alert(e.message); }
+}
+
+// ---------- Pikšķerēšanas pārbaudes (tikai owner/admin) ----------
+async function renderCyberPhishing() {
+  const box = document.getElementById('cyberContent');
+  box.innerHTML = '<p class="muted">Ielādē…</p>';
+  try {
+    const { campaigns } = await api('/api/phishing/campaigns');
+    box.innerHTML = `
+      <div class="result-box" style="background:#fbf6e8;margin-bottom:14px">
+        ℹ️ Šis ir <b>iekšējs drošības apmācību rīks</b>: nosūta darbiniekiem simulētu pikšķerēšanas e-pastu un uzskaita, kurš to atvēra vai uzklikšķināja. <b>Netiek vākti nekādi dati vai paroles</b> — pēc klikšķa darbinieks uzreiz redz izglītojošu paskaidrojumu.
+      </div>
+      <div class="toolbar"><div></div><button class="btn btn-primary" onclick="openCampaignModal()">+ Jauna kampaņa</button></div>
+      <table><thead><tr><th>Nosaukums</th><th>Statuss</th><th>Nosūtīts</th><th>Atvēra</th><th>Uzklikšķināja</th><th></th></tr></thead><tbody>
+        ${campaigns.length ? campaigns.map((c) => `
+          <tr>
+            <td><b>${esc(c.name)}</b><br><span class="muted">${esc(c.subject)}</span></td>
+            <td>${c.status === 'sent' ? '✅ Nosūtīta' : c.status === 'sending' ? '⏳ Sūta…' : '📝 Melnraksts'}</td>
+            <td>${c.total}</td>
+            <td>${c.opened}</td>
+            <td>${c.clicked}</td>
+            <td style="white-space:nowrap">
+              ${c.status === 'draft' ? `<button class="btn btn-sm btn-green" onclick="sendCampaign('${c.id}')">Nosūtīt</button>` : ''}
+              <button class="btn btn-sm btn-outline" onclick="viewCampaignStats('${c.id}')">Statistika</button>
+              <button class="btn btn-sm btn-red" onclick="deleteCampaign('${c.id}')">🗑</button>
+            </td>
+          </tr>`).join('') : '<tr><td colspan="6" class="empty">Vēl nav kampaņu.</td></tr>'}
+      </tbody></table>`;
+  } catch (e) { box.innerHTML = `<p class="empty">Kļūda: ${esc(e.message)}</p>`; }
+}
+async function openCampaignModal() {
+  let users = [];
+  try { users = (await api('/api/users?search=')).users || []; } catch (e) { alert(e.message); return; }
+  const emailUsers = users.filter((u) => u.email);
+  openModal(`
+    <h2>Jauna pikšķerēšanas kampaņa</h2>
+    <label>Kampaņas nosaukums (iekšējai lietošanai)</label>
+    <input id="campName" placeholder="piem. Q4 pārbaude" />
+    <label>Sūtītāja vārds (kā darbinieks redzēs)</label>
+    <input id="campSender" placeholder="piem. IT atbalsts" />
+    <label>E-pasta temats</label>
+    <input id="campSubject" placeholder="piem. Steidzami: apstipriniet savu kontu" />
+    <label>E-pasta saturs (HTML). Izmantojiet {{NAME}} un {{LINK}}</label>
+    <textarea id="campBody" rows="7">Sveiki, {{NAME}}!
+
+Jūsu konts jāapstiprina 24 stundu laikā, citādi tas tiks bloķēts.
+
+&lt;a href="{{LINK}}"&gt;Apstiprināt kontu&lt;/a&gt;
+
+Paldies,
+IT atbalsts</textarea>
+    <label>Saņēmēji (${emailUsers.length} ar e-pastu)</label>
+    <div style="max-height:160px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px">
+      <label style="font-weight:600;display:flex;align-items:center;gap:6px"><input type="checkbox" id="campAll" style="width:auto" onclick="toggleAllTargets(this.checked)" /> Izvēlēties visus</label>
+      ${emailUsers.map((u) => `<label style="font-weight:400;display:flex;align-items:center;gap:6px;margin-top:3px">
+        <input type="checkbox" class="camp-target" value="${u.id}" style="width:auto" /> ${esc(u.display_name)} <span class="muted">(${esc(u.email)})</span></label>`).join('')}
+    </div>
+    <p class="muted" style="margin-top:8px">Darbinieki bez e-pasta netiek rādīti — simulāciju var sūtīt tikai uz e-pastu.</p>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal()">Atcelt</button>
+      <button class="btn btn-primary" onclick="saveCampaign()">Saglabāt melnrakstu</button>
+    </div>`);
+}
+function toggleAllTargets(checked) { document.querySelectorAll('.camp-target').forEach((c) => { c.checked = checked; }); }
+async function saveCampaign() {
+  const body = {
+    name: document.getElementById('campName').value.trim(),
+    senderName: document.getElementById('campSender').value.trim(),
+    subject: document.getElementById('campSubject').value.trim(),
+    bodyHtml: document.getElementById('campBody').value,
+    userIds: Array.from(document.querySelectorAll('.camp-target:checked')).map((c) => c.value),
+  };
+  if (!body.name || !body.subject || !body.bodyHtml) { alert('Aizpildiet nosaukumu, tematu un saturu'); return; }
+  if (body.userIds.length === 0) { alert('Izvēlieties vismaz vienu saņēmēju'); return; }
+  try { await api('/api/phishing/campaigns', { method: 'POST', body }); closeModal(); renderCyberPhishing(); }
+  catch (e) { alert(e.message); }
+}
+async function sendCampaign(id) {
+  if (!confirm('Nosūtīt simulācijas e-pastus izvēlētajiem darbiniekiem?')) return;
+  try {
+    const r = await api('/api/phishing/campaigns/' + id + '/send', { method: 'POST' });
+    alert(r.note ? r.note : `Nosūtīts ${r.sent} no ${r.total} e-pastiem.`);
+    renderCyberPhishing();
+  } catch (e) { alert(e.message); }
+}
+async function viewCampaignStats(id) {
+  try {
+    const { campaign, summary, targets } = await api('/api/phishing/campaigns/' + id + '/stats');
+    openModal(`
+      <h2>${esc(campaign.name)}</h2>
+      <div class="result-box">Nosūtīts: <b>${summary.total}</b> · Atvēra: <b>${summary.opened}</b> · Uzklikšķināja: <b>${summary.clicked}</b></div>
+      <div class="toolbar" style="margin-top:12px"><div></div>
+        <button class="btn btn-outline btn-sm" onclick="window.open('/api/phishing/campaigns/${id}/export','_blank')">⬇ CSV</button></div>
+      <table><thead><tr><th>Vārds</th><th>Nosūtīts</th><th>Atvēra</th><th>Uzklikšķināja</th></tr></thead><tbody>
+        ${targets.map((t) => `<tr>
+          <td>${esc(t.display_name)}</td>
+          <td>${t.sent_at ? '✓' : '—'}</td>
+          <td>${t.opened_at ? '👁' : '—'}</td>
+          <td>${t.clicked_at ? '<span style="color:var(--red)">⚠️ jā</span>' : '—'}</td>
+        </tr>`).join('')}
+      </tbody></table>
+      <div class="modal-actions"><button class="btn btn-primary" onclick="closeModal()">Aizvērt</button></div>`);
+  } catch (e) { alert(e.message); }
+}
+async function deleteCampaign(id) {
+  if (!confirm('Dzēst šo kampaņu un tās statistiku?')) return;
+  try { await api('/api/phishing/campaigns/' + id, { method: 'DELETE' }); renderCyberPhishing(); }
   catch (e) { alert(e.message); }
 }
 
