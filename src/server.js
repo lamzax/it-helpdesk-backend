@@ -10,6 +10,8 @@ const usersRouter = require('./routes/users');
 const modulesRouter = require('./routes/modules');
 const accessRequestsRouter = require('./routes/accessRequests');
 const uploadsRouter = require('./routes/uploads');
+const trainingRouter = require('./routes/training');
+const { router: phishingRouter, publicRouter: phishingTrackRouter } = require('./routes/phishing');
 
 const app = express();
 app.use(helmet({ contentSecurityPolicy: false })); // atslegts CSP, lai admin panelis var ielādēt CDN skriptus (PapaParse)
@@ -24,6 +26,9 @@ app.use('/api/users', usersRouter);
 app.use('/api/modules', modulesRouter);
 app.use('/api/access-requests', accessRequestsRouter);
 app.use('/api/uploads', uploadsRouter);
+app.use('/api/training', trainingRouter);
+app.use('/api/phishing', phishingRouter);            // iekšā jau ir requireAuth + owner/admin
+app.use('/api/phishing-track', phishingTrackRouter); // PUBLISKS, bez auth (pikselis + klikšķa lapa)
 
 // Augšupielādētie pielikumi (foto/video/balss ziņas) -- pieejami statiski
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
