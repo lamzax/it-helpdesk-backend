@@ -29,7 +29,7 @@ body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-seri
 .sidebar-logo-text { text-align: left; line-height: 1.2; }
 .sidebar-company-name { font-size: 12px; font-weight: 700; color: var(--gold); text-transform: uppercase; letter-spacing: 0.3px; }
 .sidebar-app-name { font-size: 15px; font-weight: 700; color: #fff; }
-#mainNav { flex: 1; padding: 10px 0; display: flex; flex-direction: column; }
+#mainNav { flex: 1; padding: 10px 0; display: flex; flex-direction: column; background: transparent; }
 .sidebar-section { display: flex; flex-direction: column; margin-bottom: 6px; }
 .nav-item {
   background: rgba(255,255,255,0.06); border: none; border-left: 3px solid transparent; color: #fff; text-align: left;
