@@ -50,4 +50,34 @@ async function sendAccessRequestEmail(identifier, displayName) {
   }
 }
 
-module.exports = { sendAccessRequestEmail };
+/**
+ * Vispārīgs e-pasta sūtītājs (izmanto pikšķerēšanas simulācijas kampaņas).
+ * Atgriež true, ja e-pasts reāli nosūtīts; false, ja SMTP nav konfigurēts
+ * vai sūtīšana neizdevās — izsaucējs pats izlemj, ko darīt tālāk.
+ *
+ * @param {{to:string, subject:string, html:string, text?:string, fromName?:string}} opts
+ */
+async function sendMail(opts) {
+  const t = getTransporter();
+  if (!t) {
+    console.log(`[mailer] SMTP nav konfigurēts — e-pasts uz ${opts.to} ("${opts.subject}") NETIKA nosūtīts.`);
+    return false;
+  }
+  try {
+    const fromAddr = process.env.SMTP_FROM || process.env.SMTP_USER;
+    const from = opts.fromName ? `"${opts.fromName}" <${fromAddr}>` : fromAddr;
+    await t.sendMail({
+      from,
+      to: opts.to,
+      subject: opts.subject,
+      html: opts.html,
+      text: opts.text,
+    });
+    return true;
+  } catch (err) {
+    console.error('[mailer] Neizdevās nosūtīt e-pastu:', err.message);
+    return false;
+  }
+}
+
+module.exports = { sendAccessRequestEmail, sendMail };
