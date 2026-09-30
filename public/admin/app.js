@@ -196,19 +196,25 @@ async function renderModuleView(moduleId) {
   currentModuleFields = (await api('/api/modules/' + moduleId + '/fields')).fields;
 
   main.innerHTML = `
-    <div class="breadcrumb">${renderBreadcrumb(moduleId)}</div>
-    <div class="toolbar">
-      <input type="text" id="recordSearch" placeholder="Meklēt šajā kategorijā..." oninput="loadModuleRecords('${moduleId}')" />
-      <div>
-        ${isOwnerOrAdmin() ? `
-          <button class="btn btn-outline" onclick="openFieldsModal('${moduleId}')">🗂 Lauki</button>
-          <button class="btn btn-outline" onclick="window.open('/api/modules/${moduleId}/export','_blank')">⬇ Eksportēt CSV</button>
-          <button class="btn btn-outline" onclick="openImportModal('${moduleId}')">⬆ Importēt CSV</button>
-          <button class="btn btn-green" onclick="openRecordForm('${moduleId}')">+ Pievienot ierakstu</button>
-        ` : ''}
+    <div class="module-view">
+      <div class="module-head">
+        <div class="breadcrumb">${renderBreadcrumb(moduleId)}</div>
+        <div class="toolbar">
+          <input type="text" id="recordSearch" placeholder="Meklēt šajā kategorijā..." oninput="loadModuleRecords('${moduleId}')" />
+          <div>
+            ${isOwnerOrAdmin() ? `
+              <button class="btn btn-outline" onclick="openFieldsModal('${moduleId}')">🗂 Lauki</button>
+              <button class="btn btn-outline" onclick="window.open('/api/modules/${moduleId}/export','_blank')">⬇ Eksportēt CSV</button>
+              <button class="btn btn-outline" onclick="openImportModal('${moduleId}')">⬆ Importēt CSV</button>
+              <button class="btn btn-green" onclick="openRecordForm('${moduleId}')">+ Pievienot ierakstu</button>
+            ` : ''}
+          </div>
+        </div>
       </div>
-    </div>
-    <table id="recordsTable"><thead><tr id="recordsTableHead"></tr></thead><tbody></tbody></table>`;
+      <div class="table-scroll">
+        <table id="recordsTable" class="sticky-table"><thead><tr id="recordsTableHead"></tr></thead><tbody></tbody></table>
+      </div>
+    </div>`;
 
   await loadModuleRecords(moduleId);
 }
